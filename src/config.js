@@ -1,6 +1,6 @@
 // Eenvoudige configuratie voor de moskee website
 export const MOSQUE = {
-  name: "Marokkaanse Moskee Houthalen",
+  name: "Islamitische Moskee Houthalen",
   city: "Houthalen",
   country: "Belgium",
   latitude: 51.018, // Houthalen-Helchteren approx

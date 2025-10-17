@@ -156,7 +156,8 @@ export default function App() {
           <div>
             <h2 className="text-2xl font-bold">Locatie &amp; Contact</h2>
             <p className="mt-3"><strong>Adres</strong><br/>Houthalen, Limburg, België</p>
-            <p className="mt-3"><strong>Email</strong><br/><a className="text-primary underline" href="mailto:info@moskeehouthalen.be">info@moskeehouthalen.be</a></p>
+            <p className="mt-3"><strong>Email</strong><br/><a className="text-primary underline" href="mailto:info@imhh.be">info@imhh.be</a></p>
+            <p className="mt-3"><strong>Islamitische Moskee vzw ondernemingsnummer</strong><br/><p  href="">BE0443.204.876</p></p>
             <p className="mt-3"><strong>Openingsuren</strong><br/>Dagelijks geopend voor de vijf gebeden. Vrijdaggebed (Jumu&apos;ah) volgens aankondiging.</p>
           </div>
           <div className="bg-[#141414] border border-zinc-800 rounded-xl p-2">
