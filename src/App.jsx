@@ -65,64 +65,49 @@ export default function App() {
       </section>
 
       <section id="gebedstijden" className="py-10 md:py-12 bg-[#0a0a0a] border-y border-zinc-800">
-        <div className="mx-auto w-[min(1100px,92%)]">
-          <div className="flex items-end justify-between gap-3 flex-wrap">
-            <div>
-              <h2 className="text-2xl font-bold">Gebedstijden — {MOSQUE.city}</h2>
-              {meta && (
-                <p className="text-zinc-400 text-sm mt-1">
-                  {meta.readable} (Hijri: {meta.hijri.date})
-                </p>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <select
-                className="bg-[#141414] border border-zinc-700 rounded-lg px-3 py-2"
-                value={method}
-                onChange={(e) => setMethod(Number(e.target.value))}
-                aria-label="Berekeningsmethode"
-              >
-                {METHODS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-              <select
-                className="bg-[#141414] border border-zinc-700 rounded-lg px-3 py-2"
-                value={madhhab}
-                onChange={(e) => setMadhhab(Number(e.target.value))}
-                aria-label="Madhhab"
-              >
-                <option value={0}>Shafi&apos;i</option>
-                <option value={1}>Hanafi</option>
-              </select>
-            </div>
-          </div>
+  <div className="mx-auto w-[min(1100px,92%)]">
+    <div className="flex items-end justify-between gap-3 flex-wrap">
+      <div>
+        <h2 className="text-2xl font-bold">Gebedstijden — {MOSQUE.city}</h2>
+        {meta && (
+          <p className="text-zinc-400 text-sm mt-1">
+            {meta.readable} (Hijri: {meta.hijri.date})
+          </p>
+        )}
+      </div>
+    </div>
 
-          <div className="overflow-x-auto mt-4 rounded-lg border border-zinc-800 bg-[#141414]">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-[#101010]">
-                  <th className="text-left px-4 py-3 border-b border-zinc-800">Gebed</th>
-                  <th className="text-left px-4 py-3 border-b border-zinc-800">Tijd</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && (
-                  <tr><td className="px-4 py-3 text-zinc-400" colSpan={2}>Laden…</td></tr>
-                )}
-                {error && (
-                  <tr><td className="px-4 py-3 text-red-400" colSpan={2}>Fout: {error}</td></tr>
-                )}
-                {!loading && !error && rows.map((r) => (
-                  <tr key={r.name}>
-                    <td className="px-4 py-3 border-b border-zinc-800">{r.name}</td>
-                    <td className="px-4 py-3 border-b border-zinc-800">{r.time}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-xs text-zinc-500 mt-2">Tijden via Aladhan API. Controleer lokaal en pas zo nodig aan.</p>
-        </div>
-      </section>
+    <div className="overflow-hidden mt-4 rounded-lg border border-zinc-800 hidden md:block bg-[#141414]">
+      <iframe
+        src="https://mawaqit.net/en/w/masjid-al-muslimeen-houthalen-helchteren-3530-belgium?showOnly5PrayerTimes=0"
+        title="Gebedstijden — MAWAQIT"
+        className="w-full"
+        style={{ height: 520, border: 0, display: "block" }}   // <- hoogte geven!
+        frameBorder="0"
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        scrolling="no"
+        allow="fullscreen"
+      />
+    </div>
+    <div className="mt-4 rounded-lg border border-zinc-800 bg-[#141414] overflow-hidden md:hidden">
+  <iframe
+    src="https://mawaqit.net/en/m/masjid-al-muslimeen-houthalen-helchteren-3530-belgium?showNotification=0&showSearchButton=0&showFooter=0&showFlashMessage=0&view=mobile"
+    title="Gebedstijden — MAWAQIT (Mobiel)"
+    className="w-full"
+    style={{ height: 750, border: 0, display: "block" }}
+    frameBorder="0"
+    scrolling="no"
+    loading="lazy"
+    referrerPolicy="no-referrer"
+  />
+</div>
+
+    <p className="text-xs text-zinc-500 mt-2">
+      Tijden via Aladhan API. Controleer lokaal en pas zo nodig aan.
+    </p>
+  </div>
+</section>
 
       <section id="doneren" className="py-10 md:py-12">
         <div className="mx-auto w-[min(1100px,92%)]">
