@@ -152,19 +152,9 @@ export default function Activiteiten() {
           <div className="grid md:grid-cols-3 gap-6">
             {[
               {
-                icon: '👰',
-                title: 'Huwelijken',
-                desc: 'Begeleiding bij nikah ceremonies en islamitische huwelijken in de moskee.'
-              },
-              {
                 icon: '🤲',
                 title: 'Janazah Diensten',
                 desc: 'Ondersteuning bij begrafenisrituelen volgens islamitische tradities.'
-              },
-              {
-                icon: '👶',
-                title: 'Aqiqah Ceremonies',
-                desc: 'Viering van geboorte volgens Sunnah met gemeenschap.'
               },
               {
                 icon: '💼',
