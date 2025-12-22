@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useState } from "react";
 import Nav from "../components/Nav.jsx";
 import logo from "../assets/logo.png";
 import { usePrayerTimes } from "../hooks/usePrayerTimes.js";
@@ -12,6 +13,7 @@ export default function Home() {
   } = usePrayerTimes();
   
   const { articles } = useArticles();
+  const [showDonateModal, setShowDonateModal] = useState(false);
 
   const openDonate = (kind, amount) => {
     let url = "";
@@ -26,7 +28,7 @@ export default function Home() {
     if (url) {
       window.open(url, "_blank", "noopener");
     } else {
-      alert("Doneren is nog niet geconfigureerd. Voeg jouw Stripe Payment Link(s) toe in src/config.js.");
+      setShowDonateModal(true);
     }
   };
 
@@ -463,6 +465,42 @@ export default function Home() {
           </div>
         </div>
       </footer>
+
+      {/* Donate Modal */}
+      {showDonateModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gradient-to-br from-zinc-900 to-zinc-950 border border-zinc-800 rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center justify-center w-16 h-16 bg-amber-500/10 rounded-full mb-4">
+                <span className="text-4xl">🚧</span>
+              </div>
+              <h3 className="text-2xl font-bold text-white mb-2">
+                Binnenkort Beschikbaar
+              </h3>
+              <p className="text-zinc-400 leading-relaxed">
+                Onze online donatie functie is momenteel in ontwikkeling. 
+                Binnenkort kun je gemakkelijk en veilig online doneren via Stripe.
+              </p>
+            </div>
+
+            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 mb-6">
+              <p className="text-sm text-emerald-400 font-medium mb-2">
+                💡 Wil je nu al doneren?
+              </p>
+              <p className="text-xs text-zinc-400">
+                Neem contact met ons op via email of kom langs bij de moskee voor meer informatie over donatiemogelijkheden.
+              </p>
+            </div>
+
+            <button
+              onClick={() => setShowDonateModal(false)}
+              className="w-full bg-primary hover:bg-primary/90 text-black font-bold py-3 px-6 rounded-xl transition-all duration-300"
+            >
+              Begrepen
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
