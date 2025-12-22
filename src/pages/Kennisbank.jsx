@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useArticles } from '../hooks/useArticles';
 import Nav from '../components/Nav';
 import { MOSQUE } from '../config';
+import { getYouTubeEmbedUrl, isYouTubeUrl } from '../utils/youtube';
 
 export default function Kennisbank() {
   const { articles, loading, error } = useArticles();
@@ -57,12 +58,30 @@ export default function Kennisbank() {
                   className="bg-[#141414] border border-zinc-800 rounded-xl overflow-hidden hover:border-primary transition-colors group"
                 >
                   {article.image_url && (
-                    <div className="aspect-video overflow-hidden bg-zinc-900">
-                      <img
-                        src={article.image_url}
-                        alt={article.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
+                    <div className="aspect-video overflow-hidden bg-zinc-900 relative">
+                      {isYouTubeUrl(article.image_url) ? (
+                        <iframe
+                          src={getYouTubeEmbedUrl(article.image_url)}
+                          title={article.title}
+                          className="w-full h-full"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                        />
+                      ) : article.image_url.match(/\.(mp4|webm|ogg|mov)$/i) || article.image_url.includes('video') ? (
+                        <video
+                          src={article.image_url}
+                          className="w-full h-full object-cover"
+                          muted
+                          loop
+                          playsInline
+                        />
+                      ) : (
+                        <img
+                          src={article.image_url}
+                          alt={article.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      )}
                     </div>
                   )}
                   <div className="p-5">
