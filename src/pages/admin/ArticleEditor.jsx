@@ -327,10 +327,6 @@ export default function ArticleEditor() {
                       className="w-full h-64 object-cover rounded-lg border-2 border-zinc-700"
                     />
                   )}
-                      alt="Preview"
-                      className="w-full h-64 object-cover rounded-lg border-2 border-zinc-700"
-                    />
-                  )}
                   <button
                     type="button"
                     onClick={() => setFormData({ ...formData, image_url: '' })}
