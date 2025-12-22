@@ -304,7 +304,12 @@ export default function ArticleEditor() {
               {/* Media Preview */}
               {formData.image_url && (
                 <div className="relative group">
-                  {isYouTubeUrl(formData.image_url) ? (
+                  {(() => {
+                    const isYT = isYouTubeUrl(formData.image_url);
+                    const embedUrl = getYouTubeEmbedUrl(formData.image_url);
+                    console.log('YouTube Check:', { url: formData.image_url, isYT, embedUrl });
+                    return isYT;
+                  })() ? (
                     <div className="relative w-full rounded-lg overflow-hidden border-2 border-zinc-700" style={{ paddingBottom: '56.25%' }}>
                       <iframe
                         src={getYouTubeEmbedUrl(formData.image_url)}
@@ -479,11 +484,6 @@ export default function ArticleEditor() {
                       ) : (
                         <img
                           src={formData.image_url}
-                          alt={formData.title}
-                          className="w-full h-64 object-cover rounded-lg mb-6"
-                        />
-                      )
-                    )}
                           alt={formData.title}
                           className="w-full h-64 object-cover rounded-lg mb-6"
                         />
