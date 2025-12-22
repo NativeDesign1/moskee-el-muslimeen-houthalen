@@ -2,6 +2,7 @@ import { useParams, Link, Navigate } from 'react-router-dom';
 import { useArticle } from '../hooks/useArticles';
 import Nav from '../components/Nav';
 import { MOSQUE } from '../config';
+import { getYouTubeEmbedUrl, isYouTubeUrl } from '../utils/youtube';
 
 export default function ArticleDetail() {
   const { slug } = useParams();
@@ -87,14 +88,32 @@ export default function ArticleDetail() {
             )}
           </div>
 
-          {/* Featured Image */}
+          {/* Featured Media (Image or YouTube Video) */}
           {article.image_url && (
             <div className="mt-8 rounded-xl overflow-hidden border border-zinc-800">
-              <img
-                src={article.image_url}
-                alt={article.title}
-                className="w-full h-auto object-cover"
-              />
+              {isYouTubeUrl(article.image_url) ? (
+                <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
+                  <iframe
+                    src={getYouTubeEmbedUrl(article.image_url)}
+                    title={article.title}
+                    className="absolute top-0 left-0 w-full h-full"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                </div>
+              ) : article.image_url.match(/\.(mp4|webm|ogg|mov)$/i) ? (
+                <video
+                  src={article.image_url}
+                  controls
+                  className="w-full h-auto"
+                />
+              ) : (
+                <img
+                  src={article.image_url}
+                  alt={article.title}
+                  className="w-full h-auto object-cover"
+                />
+              )}
             </div>
           )}
 

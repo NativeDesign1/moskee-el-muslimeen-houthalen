@@ -5,6 +5,7 @@ import AdminLayout from './AdminLayout';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import '../../components/QuillEditor.css';
+import { getYouTubeEmbedUrl, isYouTubeUrl } from '../../utils/youtube';
 
 export default function ArticleEditor() {
   const { id } = useParams();
@@ -303,7 +304,17 @@ export default function ArticleEditor() {
               {/* Media Preview */}
               {formData.image_url && (
                 <div className="relative group">
-                  {formData.image_url.match(/\.(mp4|webm|ogg|mov)$/i) || formData.image_url.includes('video') ? (
+                  {isYouTubeUrl(formData.image_url) ? (
+                    <div className="relative w-full rounded-lg overflow-hidden border-2 border-zinc-700" style={{ paddingBottom: '56.25%' }}>
+                      <iframe
+                        src={getYouTubeEmbedUrl(formData.image_url)}
+                        title="YouTube Preview"
+                        className="absolute top-0 left-0 w-full h-full"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </div>
+                  ) : formData.image_url.match(/\.(mp4|webm|ogg|mov)$/i) || formData.image_url.includes('video') ? (
                     <video
                       src={formData.image_url}
                       controls
@@ -312,6 +323,10 @@ export default function ArticleEditor() {
                   ) : (
                     <img
                       src={formData.image_url}
+                      alt="Preview"
+                      className="w-full h-64 object-cover rounded-lg border-2 border-zinc-700"
+                    />
+                  )}
                       alt="Preview"
                       className="w-full h-64 object-cover rounded-lg border-2 border-zinc-700"
                     />
@@ -329,7 +344,7 @@ export default function ArticleEditor() {
               )}
 
               <p className="text-xs text-zinc-500 mt-2">
-                💡 Upload een afbeelding (max 10MB) of video (max 50MB) met originele kwaliteit, of plak een URL. Aanbevolen: 1200x630px
+                💡 Upload een afbeelding (max 10MB), video (max 50MB) met originele kwaliteit, of plak een URL (inclusief YouTube links). Aanbevolen: 1200x630px
               </p>
             </div>
 
@@ -449,7 +464,17 @@ export default function ArticleEditor() {
                   </div>
                   <div className="p-8">
                     {formData.image_url && (
-                      formData.image_url.match(/\.(mp4|webm|ogg|mov)$/i) || formData.image_url.includes('video') ? (
+                      isYouTubeUrl(formData.image_url) ? (
+                        <div className="relative w-full rounded-lg overflow-hidden mb-6" style={{ paddingBottom: '56.25%' }}>
+                          <iframe
+                            src={getYouTubeEmbedUrl(formData.image_url)}
+                            title={formData.title}
+                            className="absolute top-0 left-0 w-full h-full"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        </div>
+                      ) : formData.image_url.match(/\.(mp4|webm|ogg|mov)$/i) || formData.image_url.includes('video') ? (
                         <video
                           src={formData.image_url}
                           controls
@@ -458,6 +483,11 @@ export default function ArticleEditor() {
                       ) : (
                         <img
                           src={formData.image_url}
+                          alt={formData.title}
+                          className="w-full h-64 object-cover rounded-lg mb-6"
+                        />
+                      )
+                    )}
                           alt={formData.title}
                           className="w-full h-64 object-cover rounded-lg mb-6"
                         />
