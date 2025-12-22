@@ -1,170 +1,84 @@
-import Nav from "./components/Nav.jsx";
-import logo from "./assets/logo.png";
-import { usePrayerTimes } from "./hooks/usePrayerTimes.js";
-import { MOSQUE, DONATION_LINKS } from "./config.js";
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './contexts/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+import ScrollToTop from './components/ScrollToTop';
+
+// Public pages
+import Home from './pages/Home';
+import OverOns from './pages/OverOns';
+import Gebedstijden from './pages/Gebedstijden';
+import Kennisbank from './pages/Kennisbank';
+import ArticleDetail from './pages/ArticleDetail';
+import Activiteiten from './pages/Activiteiten';
+import Contact from './pages/Contact';
+
+// Admin pages
+import AdminLogin from './pages/admin/AdminLogin';
+import AdminDashboard from './pages/admin/AdminDashboard';
+import ArticlesList from './pages/admin/ArticlesList';
+import ArticleEditor from './pages/admin/ArticleEditor';
+import ActivitiesManager from './pages/admin/ActivitiesManager';
 
 export default function App() {
-  const {
-    method, setMethod, madhhab, setMadhhab,
-    rows, loading, error, meta, METHODS
-  } = usePrayerTimes();
-
-  const openDonate = (kind, amount) => {
-    let url = "";
-    if (kind === "fixed") {
-      url = amount === 5 ? DONATION_LINKS.EUR5
-        : amount === 10 ? DONATION_LINKS.EUR10
-        : amount === 20 ? DONATION_LINKS.EUR20
-        : "";
-    } else {
-      url = DONATION_LINKS.CUSTOM_BASE;
-    }
-    if (url) {
-      window.open(url, "_blank", "noopener");
-    } else {
-      alert("Doneren is nog niet geconfigureerd. Voeg jouw Stripe Payment Link(s) toe in src/config.js.");
-    }
-  };
-
   return (
-    <div id="home">
-      <Nav />
+    <AuthProvider>
+      <Router>
+        <ScrollToTop />
+        <Routes>
+          {/* Public Routes */}
+          <Route path="/" element={<Home />} />
+          <Route path="/over-ons" element={<OverOns />} />
+          <Route path="/gebedstijden" element={<Gebedstijden />} />
+          <Route path="/kennisbank" element={<Kennisbank />} />
+          <Route path="/kennisbank/:slug" element={<ArticleDetail />} />
+          <Route path="/activiteiten" element={<Activiteiten />} />
+          <Route path="/contact" element={<Contact />} />
 
-      <section className="border-b border-zinc-800 bg-gradient-to-b from-emerald-900/10 to-transparent">
-        <div className="mx-auto w-[min(1100px,92%)] text-center py-12 md:py-16">
-          <img
-            src={logo}
-            alt="Logo Marokkaanse Moskee Houthalen"
-            className="mx-auto w-[min(160px,22vw)] h-[min(160px,22vw)] object-contain rounded-full border border-zinc-700 shadow-[0_0_0_6px_#0f0f0f]"
-            style={{ boxShadow: "0 0 60px rgba(199, 168, 31, 0.73)" }}
+          {/* Admin Routes */}
+          <Route path="/admin/login" element={<AdminLogin />} />
+          <Route
+            path="/admin/dashboard"
+            element={
+              <ProtectedRoute>
+                <AdminDashboard />
+              </ProtectedRoute>
+            }
           />
-          <h1 className="text-3xl md:text-4xl font-extrabold mt-4">Welkom bij de {MOSQUE.name}</h1>
-          <p className="text-zinc-300 max-w-2xl mx-auto mt-2">
-            Een plek voor gebed, kennis en gemeenschap. Binnenkort voegen we meer pagina&apos;s toe.
-          </p>
-          <div className="mt-4 flex gap-3 justify-center flex-wrap">
-            <a href="#contact" className="inline-block font-bold bg-primary text-black px-4 py-2 rounded-lg shadow-ring hover:brightness-110">
-              Bezoek &amp; Contact
-            </a>
-            <a href="#doneren" className="inline-block font-bold border border-amber-300 text-amber-400 px-4 py-2 rounded-lg hover:bg-amber-900/20">
-              Doneren
-            </a>
-          </div>
-        </div>
-      </section>
-
-      <section id="welkom" className="py-10 md:py-12">
-        <div className="mx-auto w-[min(1100px,92%)]">
-          <h2 className="text-2xl font-bold">Over ons</h2>
-          <p className="text-zinc-300 mt-2">
-            Dit is de officiële webpagina van onze moskee. We werken stap voor stap aan meer functionaliteit,
-            zoals nieuws, activiteiten en informatie over lessen. Deze eerste versie is mobielvriendelijk en klaar
-            om uit te breiden met extra pagina&apos;s.
-          </p>
-        </div>
-      </section>
-
-      <section id="gebedstijden" className="py-10 md:py-12 bg-[#0a0a0a] border-y border-zinc-800">
-  <div className="mx-auto w-[min(1100px,92%)]">
-    <div className="flex items-end justify-between gap-3 flex-wrap">
-      <div>
-        <h2 className="text-2xl font-bold">Gebedstijden — {MOSQUE.city}</h2>
-        {meta && (
-          <p className="text-zinc-400 text-sm mt-1">
-            {meta.readable} (Hijri: {meta.hijri.date})
-          </p>
-        )}
-      </div>
-    </div>
-
-    <div className="overflow-hidden mt-4 rounded-lg border border-zinc-800 hidden md:block bg-[#141414]">
-      <iframe
-        src="https://mawaqit.net/en/w/masjid-al-muslimeen-houthalen-helchteren-3530-belgium?showOnly5PrayerTimes=0"
-        title="Gebedstijden — MAWAQIT"
-        className="w-full"
-        style={{ height: 520, border: 0, display: "block" }}   // <- hoogte geven!
-        frameBorder="0"
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        scrolling="no"
-        allow="fullscreen"
-      />
-    </div>
-    <div className="mt-4 rounded-lg border border-zinc-800 bg-[#141414] overflow-hidden md:hidden">
-  <iframe
-    src="https://mawaqit.net/en/m/masjid-al-muslimeen-houthalen-helchteren-3530-belgium?showNotification=0&showSearchButton=0&showFooter=0&showFlashMessage=0&view=mobile"
-    title="Gebedstijden — MAWAQIT (Mobiel)"
-    className="w-full"
-    style={{ height: 750, border: 0, display: "block" }}
-    frameBorder="0"
-    scrolling="no"
-    loading="lazy"
-    referrerPolicy="no-referrer"
-  />
-</div>
-
-    <p className="text-xs text-zinc-500 mt-2">
-      Tijden via Aladhan API. Controleer lokaal en pas zo nodig aan.
-    </p>
-  </div>
-</section>
-
-      <section id="doneren" className="py-10 md:py-12">
-        <div className="mx-auto w-[min(1100px,92%)]">
-          <h2 className="text-2xl font-bold">Doneren</h2>
-          <p className="text-zinc-300 mt-2">Steun de moskee met een bijdrage.</p>
-          <div className="mt-4 flex flex-wrap gap-3">
-            {[5,10,20].map((amt) => (
-              <button
-                key={amt}
-                onClick={() => openDonate("fixed", amt)}
-                className="font-bold bg-primary text-black px-4 py-2 rounded-lg hover:brightness-110"
-              >
-                €{amt}
-              </button>
-            ))}
-            <button
-              onClick={() => openDonate("custom")}
-              className="font-bold border border-amber-400 text-amber-400 px-4 py-2 rounded-lg hover:bg-amber-900/20"
-            >
-              Kies zelf bedrag
-            </button>
-          </div>
-          {/* <p className="text-xs text-zinc-500 mt-2">
-            Tip: gebruik Stripe Payment Links en plak de URL&apos;s in <code>src/config.js</code>.
-          </p> */}
-        </div>
-      </section>
-
-      <section id="contact" className="py-10 md:py-12">
-        <div className="mx-auto w-[min(1100px,92%)] grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <h2 className="text-2xl font-bold">Locatie &amp; Contact</h2>
-            <p className="mt-3"><strong>Adres</strong><br/>Houthalen, Limburg, België</p>
-            <p className="mt-3"><strong>Email</strong><br/><a className="text-primary underline" href="mailto:info@imhh.be">info@imhh.be</a></p>
-            <p className="mt-3"><strong>Islamitische Moskee vzw ondernemingsnummer</strong><br/><p  href="">BE0443.204.876</p></p>
-            <p className="mt-3"><strong>Openingsuren</strong><br/>Dagelijks geopend voor de vijf gebeden. Vrijdaggebed (Jumu&apos;ah) volgens aankondiging.</p>
-          </div>
-          <div className="bg-[#141414] border border-zinc-800 rounded-xl p-2">
-            <iframe
-              title="Moskee locatie"
-              className="w-full h-64 md:h-80 rounded-lg"
-              src={`https://www.google.com/maps?q=${encodeURIComponent("Marokkaanse Moskee Houthalen")}&output=embed`}
-              loading="lazy"
-            ></iframe>
-          </div>
-        </div>
-      </section>
-
-      <footer className="border-t border-zinc-800 bg-[#0a0a0a]">
-        <div className="mx-auto w-[min(1100px,92%)] flex flex-wrap items-center justify-between gap-3 py-4">
-          <p>&copy; {new Date().getFullYear()} {MOSQUE.name}. Alle rechten voorbehouden.</p>
-          <div className="flex gap-3 text-zinc-400">
-            <a className="hover:text-white" href="#home">Home</a>
-            <a className="hover:text-white" href="#contact">Contact</a>
-          </div>
-        </div>
-      </footer>
-    </div>
+          <Route
+            path="/admin/articles"
+            element={
+              <ProtectedRoute>
+                <ArticlesList />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/articles/new"
+            element={
+              <ProtectedRoute>
+                <ArticleEditor />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/articles/:id"
+            element={
+              <ProtectedRoute>
+                <ArticleEditor />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/activities"
+            element={
+              <ProtectedRoute>
+                <ActivitiesManager />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </Router>
+    </AuthProvider>
   );
 }
+
