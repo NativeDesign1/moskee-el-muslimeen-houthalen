@@ -5,6 +5,7 @@ import logo from "../assets/logo.png";
 import { usePrayerTimes } from "../hooks/usePrayerTimes.js";
 import { useArticles } from "../hooks/useArticles.js";
 import { MOSQUE, DONATION_LINKS } from "../config.js";
+import { getYouTubeEmbedUrl, isYouTubeUrl } from "../utils/youtube.js";
 
 export default function Home() {
   const {
@@ -187,14 +188,32 @@ export default function Home() {
                   >
                     {article.image_url && (
                       <div className="aspect-video overflow-hidden bg-zinc-900 relative">
-                        <img
-                          src={article.image_url}
-                          alt={article.title}
-                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+                        {isYouTubeUrl(article.image_url) ? (
+                          <iframe
+                            src={getYouTubeEmbedUrl(article.image_url)}
+                            title={article.title}
+                            className="w-full h-full"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        ) : article.image_url.match(/\.(mp4|webm|ogg|mov)$/i) || article.image_url.includes('video') ? (
+                          <video
+                            src={article.image_url}
+                            className="w-full h-full object-cover"
+                            muted
+                            loop
+                            playsInline
+                          />
+                        ) : (
+                          <img
+                            src={article.image_url}
+                            alt={article.title}
+                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                          />
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none"></div>
                         {article.category && (
-                          <span className="absolute top-3 left-3 text-xs font-bold text-black bg-primary px-3 py-1 rounded-full uppercase tracking-wide">
+                          <span className="absolute top-3 left-3 text-xs font-bold text-black bg-primary px-3 py-1 rounded-full uppercase tracking-wide z-10">
                             {article.category}
                           </span>
                         )}
