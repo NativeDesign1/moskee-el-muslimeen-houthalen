@@ -191,7 +191,7 @@ export default function Kennisbank() {
                 <Link
                   key={article.id}
                   to={`/kennisbank/${article.slug}`}
-                  className="bg-[#141414] border border-zinc-800 rounded-xl overflow-hidden hover:border-primary transition-colors group"
+                  className="bg-[#141414] border border-zinc-800 rounded-xl overflow-hidden hover:border-primary transition-colors group flex flex-col"
                 >
                   {article.image_url && (
                     <div className="aspect-video overflow-hidden bg-zinc-900 relative">
@@ -220,22 +220,24 @@ export default function Kennisbank() {
                       )}
                     </div>
                   )}
-                  <div className="p-5">
-                    {article.category && (
-                      <span className="text-xs font-semibold text-primary uppercase tracking-wide">
-                        {article.category}
-                      </span>
-                    )}
-                    <h3 className="text-xl font-bold mt-2 group-hover:text-primary transition-colors">
-                      {article.title}
-                    </h3>
-                    {article.excerpt && (
-                      <p className="text-zinc-400 mt-2 text-sm line-clamp-3">
-                        {article.excerpt}
-                      </p>
-                    )}
-                    <div className="flex items-center justify-between mt-4 text-xs text-zinc-500">
-                      {article.author && <span>Door {article.author}</span>}
+                  <div className="p-5 flex flex-col flex-1">
+                    <div className="flex-1">
+                      {article.category && (
+                        <span className="text-xs font-semibold text-primary uppercase tracking-wide">
+                          {article.category}
+                        </span>
+                      )}
+                      <h3 className="text-xl font-bold mt-2 group-hover:text-primary transition-colors line-clamp-2">
+                        {article.title}
+                      </h3>
+                      {article.excerpt && (
+                        <p className="text-zinc-400 mt-2 text-sm line-clamp-3">
+                          {article.excerpt}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-zinc-800 text-xs text-zinc-500">
+                      {article.author && <span>📝 {article.author}</span>}
                       {article.published_at && (
                         <span>
                           {new Date(article.published_at).toLocaleDateString('nl-NL', {

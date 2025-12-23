@@ -184,7 +184,7 @@ export default function Home() {
                   <Link
                     key={article.id}
                     to={`/kennisbank/${article.slug}`}
-                    className="group bg-gradient-to-br from-zinc-900/80 to-zinc-900/40 border border-zinc-800 rounded-2xl overflow-hidden hover:border-primary transition-all duration-300 hover:shadow-lg hover:shadow-primary/20 hover:-translate-y-1"
+                    className="group bg-gradient-to-br from-zinc-900/80 to-zinc-900/40 border border-zinc-800 rounded-2xl overflow-hidden hover:border-primary transition-all duration-300 hover:shadow-lg hover:shadow-primary/20 hover:-translate-y-1 flex flex-col"
                   >
                     {article.image_url && (
                       <div className="aspect-video overflow-hidden bg-zinc-900 relative">
@@ -219,15 +219,17 @@ export default function Home() {
                         )}
                       </div>
                     )}
-                    <div className="p-6">
-                      <h3 className="text-xl font-bold group-hover:text-primary transition-colors line-clamp-2">
-                        {article.title}
-                      </h3>
-                      {article.excerpt && (
-                        <p className="text-zinc-400 mt-3 text-sm line-clamp-3 leading-relaxed">
-                          {article.excerpt}
-                        </p>
-                      )}
+                    <div className="p-6 flex flex-col flex-1">
+                      <div className="flex-1">
+                        <h3 className="text-xl font-bold group-hover:text-primary transition-colors line-clamp-2">
+                          {article.title}
+                        </h3>
+                        {article.excerpt && (
+                          <p className="text-zinc-400 mt-3 text-sm line-clamp-3 leading-relaxed">
+                            {article.excerpt}
+                          </p>
+                        )}
+                      </div>
                       <div className="flex items-center justify-between mt-4 pt-4 border-t border-zinc-800">
                         {article.author && (
                           <span className="text-xs text-zinc-500">📝 {article.author}</span>
