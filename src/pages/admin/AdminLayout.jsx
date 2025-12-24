@@ -19,6 +19,7 @@ export default function AdminLayout({ children }) {
     { path: '/admin/dashboard', label: 'Dashboard', icon: '📊' },
     { path: '/admin/articles', label: 'Kennisbank', icon: '📚' },
     { path: '/admin/activities', label: 'Activiteiten', icon: '🎯' },
+    { path: '/admin/analytics', label: 'Analytics', icon: '📈' },
   ];
 
   return (

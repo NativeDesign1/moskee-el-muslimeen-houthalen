@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import ScrollToTop from './components/ScrollToTop';
+import PageTracker from './components/PageTracker';
 
 // Public pages
 import Home from './pages/Home';
@@ -18,12 +19,14 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import ArticlesList from './pages/admin/ArticlesList';
 import ArticleEditor from './pages/admin/ArticleEditor';
 import ActivitiesManager from './pages/admin/ActivitiesManager';
+import Analytics from './pages/admin/Analytics';
 
 export default function App() {
   return (
     <AuthProvider>
       <Router>
         <ScrollToTop />
+        <PageTracker />
         <Routes>
           {/* Public Routes */}
           <Route path="/" element={<Home />} />
@@ -73,6 +76,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <ActivitiesManager />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/analytics"
+            element={
+              <ProtectedRoute>
+                <Analytics />
               </ProtectedRoute>
             }
           />
