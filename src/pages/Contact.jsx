@@ -139,7 +139,7 @@ export default function Contact() {
               },
               {
                 q: 'Welke kledingvoorschriften gelden?',
-                a: 'We vragen bezoekers om respectvolle kleding te dragen. Voor vrouwen is een hoofddoek niet verplicht als bezoeker, maar wel gewaardeerd. Schoenen worden uitgetrokken bij binnenkomst.'
+                a: 'We vragen bezoekers om respectvolle kleding te dragen. Voor vrouwen is een hoofddoek verplicht als bezoeker. Schoenen worden uitgetrokken bij binnenkomst.'
               },
               {
                 q: 'Zijn er faciliteiten voor wudhu?',
