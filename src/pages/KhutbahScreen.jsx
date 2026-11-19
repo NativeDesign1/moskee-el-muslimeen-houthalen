@@ -96,7 +96,7 @@ function Caption({ caption, size }) {
 
   return (
     <div ref={container} className="flex h-full min-h-0 w-full flex-col overflow-y-auto">
-      <p ref={paragraph} className="my-auto shrink-0 text-center font-semibold leading-tight [overflow-wrap:anywhere]">
+      <p ref={paragraph} className="my-auto shrink-0 whitespace-pre-line text-center font-semibold leading-tight [overflow-wrap:anywhere]">
         {caption}
       </p>
     </div>

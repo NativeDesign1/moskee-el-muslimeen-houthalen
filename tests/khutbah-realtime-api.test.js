@@ -52,7 +52,8 @@ test('the operator lease precedes a single server-side SDP exchange for Dutch te
   assert.equal(config.model, 'gpt-realtime-2.1');
   assert.equal(config.instructions, DIRECT_TRANSLATION_INSTRUCTIONS);
   assert.match(config.instructions, /Darija naar natuurlijk Nederlands/);
-  assert.match(config.instructions, /GEEN_ONDERTITEL/);
+  assert.match(config.instructions, /kind, source en caption/);
+  assert.match(config.instructions, /quran, hadith, shahada en uncertain blijft caption leeg/);
   assert.deepEqual(config.output_modalities, ['text']);
   assert.equal(config.audio.input.turn_detection, null);
   assert.equal(config.reasoning.effort, 'minimal');

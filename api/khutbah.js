@@ -1,13 +1,12 @@
-import { DIRECT_TRANSLATION_INSTRUCTIONS, TRANSLATION_INSTRUCTIONS, captionText } from '../lib/khutbah-caption.js';
+import { DIRECT_TRANSLATION_INSTRUCTIONS, KHUTBAH_OUTPUT_SCHEMA, TRANSLATION_INSTRUCTIONS, parseKhutbahOutput } from '../lib/khutbah-caption.js';
+import { checkKhutbahSource, normalizeKhutbahSource } from '../lib/khutbah-guard.js';
+import { verifyQuranVerse } from '../lib/quran-verse.js';
 import { RequestError, control, json, readSessionHeaders, serverConfig } from '../lib/khutbah-server.js';
 
 // Vercel Node function. Audio is processed in memory for one subtitle at a time.
 const MAX_AUDIO_BYTES = 44 + 15 * 16000 * 2;
 const AUDIO_MODEL_UNAVAILABLE = Symbol('audio model unavailable');
 let retryDirectAudioAt = 0;
-const CAPTION_SCHEMA = {
-  type: 'object', properties: { caption: { type: 'string' } }, required: ['caption'], additionalProperties: false,
-};
 
 async function readAudio(request) {
   if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'audio/wav') {
@@ -75,19 +74,9 @@ async function openAI(path, body, apiKey, signal) {
   return response.json();
 }
 
-function captionFromJson(text) {
-  try {
-    const value = JSON.parse(text);
-    if (!value || !Object.hasOwn(value, 'caption') || Object.keys(value).length !== 1) return null;
-    return captionText(value.caption);
-  } catch {
-    return null;
-  }
-}
-
-async function translateDirectly(wav, apiKey, signal) {
+async function translateDirectly(wav, apiKey, signal, mode) {
   const result = await openAI('chat/completions', JSON.stringify({
-    model: 'gpt-audio-1.5', modalities: ['text'], store: false, max_completion_tokens: 300,
+    model: 'gpt-audio-1.5', modalities: ['text'], store: false, max_completion_tokens: 600,
     messages: [
       { role: 'system', content: DIRECT_TRANSLATION_INSTRUCTIONS },
       { role: 'user', content: [
@@ -102,18 +91,16 @@ async function translateDirectly(wav, apiKey, signal) {
   }
 
   const choice = result?.choices?.[0];
-  if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') return '';
+  if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') return { caption: '' };
   if (choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.function_call) return null;
-  const text = choice.message?.content;
-  if (typeof text === 'string' && text.trimStart().startsWith('{')) return captionFromJson(text);
-  return captionText(text);
+  return parseKhutbahOutput(choice.message?.content, mode, undefined, true);
 }
 
 function incomplete(stage, reason) {
   return { caption: '', skipped: 'incomplete', stage, reason };
 }
 
-function translatedCaption(result) {
+function translatedCaption(result, mode, transcript) {
   if (result?.status === 'incomplete') {
     const reason = result.incomplete_details?.reason;
     if (reason === 'content_filter') return { caption: '' };
@@ -135,31 +122,54 @@ function translatedCaption(result) {
   if (!content.every(part => part?.type === 'output_text' && typeof part.text === 'string')) {
     return incomplete('translation', 'invalid_output');
   }
-  const caption = captionFromJson(content.map(part => part.text).join(''));
-  return caption === null ? incomplete('translation', 'invalid_output') : { caption };
+  return parseKhutbahOutput(content.map(part => part.text).join(''), mode, transcript)
+    ?? incomplete('translation', 'invalid_output');
 }
 
-async function translateTranscript(wav, apiKey, { signal, deadline, requestSignal }) {
+async function translateTranscript(wav, apiKey, { signal, deadline, requestSignal }, mode, expected) {
   const form = new FormData();
   form.append('model', 'gpt-transcribe');
   form.append('file', new Blob([wav], { type: 'audio/wav' }), 'fragment.wav');
   form.append('languages[]', 'ar');
-  form.append('prompt', 'خطبة جمعة يتحدث فيها الإمام بالعربية الفصحى والدارجة المغربية، وقد ينتقل بينهما في الجملة نفسها.');
+  form.append('prompt', 'خطبة جمعة بالفصحى والدارجة المغربية. اكتب فقط ما سمعته بحروفه، بما فيه النفي والتكرار. لا تكمل آية أو حديثا أو شهادة من الذاكرة.');
   let stage = 'transcription';
   try {
     const transcript = await openAI('audio/transcriptions', form, apiKey, signal);
     if (typeof transcript?.text !== 'string') return incomplete('transcription', 'missing_text');
     // The transcription API returns an empty language list when it cannot identify the input language reliably.
     if (!transcript.text.trim() || (Array.isArray(transcript.languages) && !transcript.languages.length)) return { caption: '' };
+    let checked = checkKhutbahSource(transcript.text, mode);
+    if (expected) {
+      const agrees = expected.quran
+        ? checked?.quran === expected.quran
+        : checked?.verified && checked.caption === expected.caption;
+      if (!agrees || normalizeKhutbahSource(expected.source) !== normalizeKhutbahSource(transcript.text)) {
+        return { caption: '', skipped: 'unverified' };
+      }
+    }
+    if (checked?.quran) {
+      const reference = checked.quran;
+      // The local index only suggests a reference. Compare every Arabic word
+      // with the publisher's verse before accepting its Dutch translation.
+      checked = await verifyQuranVerse(transcript.text, reference, signal, {
+        witness: expected?.source,
+        includeArabic: mode === 'sources',
+      });
+      if (checked.verified) checked = { ...checked, quran: reference };
+    }
+    if (mode === 'sources') {
+      return checked?.verified ? { ...checked, source: transcript.text } : { caption: '', skipped: 'unverified' };
+    }
+    if (checked !== null) return checked;
 
     stage = 'translation';
     const result = await openAI('responses', JSON.stringify({
       model: 'gpt-6-luna', store: false, reasoning: { effort: 'none' }, max_output_tokens: 1000,
-      instructions: TRANSLATION_INSTRUCTIONS + ' Geef een lege caption bij stilte, onverstaanbare spraak of een onzekere betekenis.',
+      instructions: TRANSLATION_INSTRUCTIONS,
       input: transcript.text,
-      text: { format: { type: 'json_schema', name: 'ondertitel', strict: true, schema: CAPTION_SCHEMA } },
+      text: { format: { type: 'json_schema', name: 'ondertitel', strict: true, schema: KHUTBAH_OUTPUT_SCHEMA } },
     }), apiKey, signal);
-    return translatedCaption(result);
+    return translatedCaption(result, mode, transcript.text);
   } catch (error) {
     if (deadline.aborted && !requestSignal.aborted && ['AbortError', 'TimeoutError'].includes(error?.name)) {
       return incomplete(stage, 'timeout');
@@ -168,14 +178,17 @@ async function translateTranscript(wav, apiKey, { signal, deadline, requestSigna
   }
 }
 
-async function translate(wav, apiKey, timing, preferTranscript) {
-  if (!preferTranscript && Date.now() >= retryDirectAudioAt) {
-    const caption = await translateDirectly(wav, apiKey, timing.signal);
-    if (caption !== null) return { caption };
+async function translate(wav, apiKey, timing, preferTranscript, mode) {
+  let expected;
+  if (mode === 'auto' && !preferTranscript && Date.now() >= retryDirectAudioAt) {
+    const result = await translateDirectly(wav, apiKey, timing.signal, mode);
+    if (result !== null && !result.verified && !result.quran) return result;
+    // A model may complete a familiar quotation from memory. Verify the same audio independently.
+    expected = result;
   }
   // The original WAV and deadline also apply to the single recovery attempt.
-  const result = await translateTranscript(wav, apiKey, timing);
-  return { ...result, route: 'transcript' };
+  const result = await translateTranscript(wav, apiKey, timing, mode, expected);
+  return { ...result, route: expected ? 'source-check' : 'transcript' };
 }
 
 export default {
@@ -183,6 +196,8 @@ export default {
     if (request.method !== 'POST') return json({ error: 'Gebruik POST voor een audiofragment.' }, 405, { Allow: 'POST' });
     try {
       const { authorization, session } = readSessionHeaders(request);
+      const mode = request.headers.get('x-khutbah-mode') ?? 'auto';
+      if (!['auto', 'sources'].includes(mode)) throw new RequestError(400, 'Onbekende modus voor broncontrole.');
       const number = request.headers.get('x-khutbah-sequence');
       const sequence = Number(number);
       if (!/^[1-9]\d{0,9}$/.test(number ?? '') || sequence > 2147483647) {
@@ -197,9 +212,10 @@ export default {
       await control('claim', options);
       if (!hasSignal(wav)) return json({ caption: '' });
       const preferTranscript = request.headers.get('x-khutbah-route') === 'transcript';
-      const result = await translate(wav, apiKey, { signal, deadline, requestSignal: request.signal }, preferTranscript);
+      const result = await translate(wav, apiKey, { signal, deadline, requestSignal: request.signal }, preferTranscript, mode);
       request.signal.throwIfAborted();
-      if (result.caption) {
+      // Source review returns a candidate to the signed-in operator, who confirms publication.
+      if (result.caption && mode === 'auto') {
         signal.throwIfAborted();
         await control('publish', options, result.caption);
       }

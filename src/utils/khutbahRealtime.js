@@ -1,4 +1,4 @@
-import { captionText } from '../../lib/khutbah-caption.js';
+import { parseKhutbahOutput } from '../../lib/khutbah-caption.js';
 
 const SETUP_TIMEOUT_MS = 8000;
 const RESPONSE_TIMEOUT_MS = 4000;
@@ -6,17 +6,17 @@ const MAX_PENDING = 3;
 const MAX_FAILURES = 3;
 
 function completedCaption(response) {
-  if (response.status_details?.reason === 'content_filter') return '';
+  if (response.status_details?.reason === 'content_filter') return { caption: '' };
   if (response.status !== 'completed' || !Array.isArray(response.output)) return null;
   const messages = response.output.filter(item => item?.type !== 'reasoning');
   if (messages.length !== 1) return null;
   const [message] = messages;
   if (message?.type !== 'message' || message.role !== 'assistant'
       || (message.status && message.status !== 'completed') || !Array.isArray(message.content)) return null;
-  if (message.content.some(part => part?.type === 'refusal')) return '';
+  if (message.content.some(part => part?.type === 'refusal')) return { caption: '' };
   if (!message.content.every(part => ['text', 'output_text'].includes(part?.type) && typeof part.text === 'string')) return null;
   const text = message.content.map(part => part.text).join('').trim();
-  return text ? captionText(text) : null;
+  return parseKhutbahOutput(text, 'auto', undefined, true);
 }
 
 // Microphone media uses WebRTC. The ordered data channel carries clip boundaries and final captions.

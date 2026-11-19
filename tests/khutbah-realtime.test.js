@@ -68,6 +68,10 @@ async function connect(t) {
   return { ...setup, client: await setup.ready };
 }
 
+function ordinary(caption) {
+  return JSON.stringify({ kind: 'speech', source: 'نساعد بعضنا اليوم', caption });
+}
+
 function done(channel, clip, text, overrides = {}) {
   channel.receive({ type: 'response.done', response: {
     status: 'completed', metadata: { clip },
@@ -107,25 +111,29 @@ test('references each committed audio item explicitly and matches out-of-order f
     output_modalities: ['text'], input: [{ type: 'item_reference', id }],
   })));
   channel.receive({ type: 'response.output_text.done', text: 'Afgebroken zin' });
-  done(channel, 'unknown', 'Ander antwoord');
-  done(channel, '2', 'Tweede ondertitel');
-  assert.equal(await second, 'Tweede ondertitel');
-  done(channel, '1', '  Eerste ondertitel ');
-  assert.equal(await first, 'Eerste ondertitel');
+  done(channel, 'unknown', ordinary('Ander antwoord'));
+  done(channel, '2', ordinary('Tweede ondertitel'));
+  assert.deepEqual(await second, { caption: 'Tweede ondertitel' });
+  done(channel, '1', ordinary('  Eerste ondertitel '));
+  assert.deepEqual(await first, { caption: 'Eerste ondertitel' });
   assert.deepEqual(channel.sent.filter(event => event.type === 'conversation.item.delete').map(event => event.item_id),
     ['second-audio', 'first-audio']);
 });
 
 test('only emits complete subtitles and preserves refusal and silence', async t => {
   const cases = [
-    ['silence', '[GEEN_ONDERTITEL]', {}, ''],
-    ['content filter', 'Onveilige inhoud', { status: 'incomplete', status_details: { reason: 'content_filter' } }, ''],
-    ['refusal', 'Niet publiceren', { output: [{ type: 'message', role: 'assistant', content: [{ type: 'refusal' }] }] }, ''],
+    ['silence', JSON.stringify({ kind: 'silence', source: '', caption: '' }), {}, { caption: '' }],
+    ['content filter', 'Onveilige inhoud', { status: 'incomplete', status_details: { reason: 'content_filter' } }, { caption: '' }],
+    ['refusal', 'Niet publiceren', { output: [{ type: 'message', role: 'assistant', content: [{ type: 'refusal' }] }] }, { caption: '' }],
     ['incomplete', 'Nog niet klaar', { status: 'incomplete' }, null],
     ['missing message', 'Onvolledig', { output: [] }, null],
     ['structured output', '{"caption":"Ongeldig"}', {}, null],
+    ['missing input evidence', 'Geen andere god dan Allah.', {}, null],
+    ['unlisted sacred text', JSON.stringify({ kind: 'hadith', source: 'من حسن إسلام المرء تركه ما لا يعنيه', caption: 'Verzonnen vertaling.' }), {}, { caption: '', skipped: 'unverified' }],
+    ['protected source with wrong Dutch', JSON.stringify({ kind: 'shahada', source: 'لا إله إلا الله', caption: 'Geen andere god.' }), {},
+      { caption: 'Niemand heeft het recht om aanbeden te worden behalve Allah.', verified: true, source: 'لا إله إلا الله' }],
     ['blank text', ' ', {}, null],
-    ['overlong text', 'Een te lange zin.'.repeat(40), {}, null],
+    ['overlong text', ordinary('Een te lange zin.'.repeat(40)), {}, { caption: '', skipped: 'unverified' }],
   ];
   for (const [label, text, overrides, expected] of cases) {
     await t.test(label, async t => {
@@ -133,7 +141,7 @@ test('only emits complete subtitles and preserves refusal and silence', async t 
       const result = client.commit();
       channel.receive({ type: 'input_audio_buffer.committed', item_id: 'item' });
       done(channel, '1', text, overrides);
-      assert.equal(await result, expected);
+      assert.deepEqual(await result, expected);
       client.close();
     });
   }
@@ -146,8 +154,8 @@ test('drops excess commits cleanly and does not shift acknowledgment order', asy
   assert.equal(channel.sent.at(-1).type, 'input_audio_buffer.clear');
   assert.equal(channel.sent.filter(e => e.type === 'input_audio_buffer.commit').length, 3);
   channel.receive({ type: 'input_audio_buffer.committed', item_id: 'original' });
-  done(channel, '1', 'Eerste zin.');
-  assert.equal(await clips[0], 'Eerste zin.');
+  done(channel, '1', ordinary('Eerste zin.'));
+  assert.deepEqual(await clips[0], { caption: 'Eerste zin.' });
   client.close();
   assert.deepEqual(await Promise.all(clips.slice(1)), [null, null]);
 });
@@ -215,25 +223,25 @@ test('one slow acknowledged response falls back independently and its late capti
   const second = client.commit();
   channel.receive({ type: 'input_audio_buffer.committed', item_id: 'fast' });
   t.mock.timers.tick(1000);
-  assert.equal(await first, null);
+  assert.deepEqual(await first, null);
   const cancel = channel.sent.find(event => event.type === 'response.cancel');
   assert.equal(cancel.response_id, 'response-slow');
   channel.receive({ type: 'error', error: { event_id: cancel.event_id, code: 'response_cancel_not_active' } });
-  done(channel, '1', 'Verouderde ondertitel.');
-  done(channel, '2', 'Tweede ondertitel.');
-  assert.equal(await second, 'Tweede ondertitel.');
+  done(channel, '1', ordinary('Verouderde ondertitel.'));
+  done(channel, '2', ordinary('Tweede ondertitel.'));
+  assert.deepEqual(await second, { caption: 'Tweede ondertitel.' });
   assert.equal(client.active, true);
   assert.equal(onDisconnect.mock.callCount(), 0);
 });
 
 test('reads one assistant caption alongside reasoning metadata and rejects additional output', async t => {
   const { channel, client } = await connect(t);
-  const message = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'De zin.' }] };
-  for (const [i, [extra, expected]] of [[{ type: 'reasoning' }, 'De zin.'], [message, null], [{ type: 'function_call' }, null]].entries()) {
+  const message = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: ordinary('De zin.') }] };
+  for (const [i, [extra, expected]] of [[{ type: 'reasoning' }, { caption: 'De zin.' }], [message, null], [{ type: 'function_call' }, null]].entries()) {
     const request = client.commit();
     channel.receive({ type: 'input_audio_buffer.committed', item_id: 'audio-' + i });
     done(channel, String(i + 1), null, { output: [extra, message] });
-    assert.equal(await request, expected);
+    assert.deepEqual(await request, expected);
   }
 });
 

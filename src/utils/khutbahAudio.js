@@ -62,7 +62,7 @@ export function khutbahWavDurationMs(clip) {
 }
 
 // Keep a short lead-in for soft consonants. Prefer pauses and cap continuous speech.
-export function speechSegments(rate, onClip, { onStart, onDiscard, isRealtime } = {}) {
+export function speechSegments(rate, onClip, { onStart, onDiscard, isRealtime, isSourceReading } = {}) {
   let lead = [];
   let frames = [];
   let voicedMs = 0;
@@ -98,10 +98,19 @@ export function speechSegments(rate, onClip, { onStart, onDiscard, isRealtime } 
     }
     quietMs = speech ? 0 : quietMs + FRAME_MS;
     const duration = frames.length * FRAME_MS;
-    const phraseEnded = quietMs >= (duration >= 1800 ? 280 : 520);
     const streaming = isRealtime?.();
+    // On a live connection a clear pause can release a phrase early. Allow
+    // extra silence after a short utterance so a hesitation stays in the clip.
+    const pauseMs = streaming
+      ? (voicedMs >= 800 ? 240 : 400)
+      : (duration >= 1800 ? 280 : 520);
     const softBreak = duration >= (streaming ? 2000 : 3000) && softMs >= 120;
-    if (phraseEnded || softBreak || duration >= (streaming ? 2800 : MAX_CLIP_MS)) {
+    // In source review a full recited verse matters. A soft vowel or the usual
+    // four-second cap can divide it into two fragments that cannot be verified.
+    const complete = isSourceReading?.()
+      ? quietMs >= 440 || duration >= 12000
+      : quietMs >= pauseMs || softBreak || duration >= (streaming ? 2800 : MAX_CLIP_MS);
+    if (complete) {
       if (voicedMs >= 160) onClip(encodeWav(frames, rate));
       else onDiscard?.();
       frames = [];
@@ -113,7 +122,7 @@ export function speechSegments(rate, onClip, { onStart, onDiscard, isRealtime } 
   };
 }
 
-export async function openKhutbahMicrophone({ deviceId, signal, onLevel, live, onClip, onFailure, onStart, onDiscard, isRealtime }) {
+export async function openKhutbahMicrophone({ deviceId, signal, onLevel, live, onClip, onFailure, onStart, onDiscard, isRealtime, isSourceReading }) {
   if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
     throw new Error('Open de adminpagina via HTTPS of localhost in een recente browser met microfoontoegang.');
   }
@@ -152,7 +161,7 @@ export async function openKhutbahMicrophone({ deviceId, signal, onLevel, live, o
     const source = context.createMediaStreamSource(stream);
     source.connect(node);
     node.connect(context.destination);
-    const collect = speechSegments(context.sampleRate, onClip, { onStart, onDiscard, isRealtime });
+    const collect = speechSegments(context.sampleRate, onClip, { onStart, onDiscard, isRealtime, isSourceReading });
     let nextLevel = 0;
     node.port.onmessage = ({ data }) => {
       let energy = 0;
