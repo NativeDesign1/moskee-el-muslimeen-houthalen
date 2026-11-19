@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import AdminLayout from './AdminLayout';
 import { supabase } from '../../supabaseClient';
-import { joinKhutbahWav, khutbahWavDurationMs, openKhutbahMicrophone } from '../../utils/khutbahAudio';
+import { adjacentAudio, joinKhutbahWav, khutbahWavDurationMs, openKhutbahMicrophone } from '../../utils/khutbahAudio';
 import { openKhutbahRealtime } from '../../utils/khutbahRealtime';
 import { normalizeKhutbahSource } from '../../../lib/khutbah-guard';
 import { consistentQuranVowels } from '../../../lib/quran-text';
@@ -27,6 +27,8 @@ function describeError(error) {
 }
 
 function skippedClipMessage({ skipped, stage, reason }) {
+  if (skipped === 'needs_context') return 'Dit fragment vormt nog geen volledige zin en is niet gepubliceerd.';
+  if (skipped === 'context_unavailable') return 'De extra controle van deze zin was niet beschikbaar.';
   if (skipped === 'unverified') return 'Dit fragment bleef van de tv. De bron of de uitgesproken woorden konden niet worden bevestigd.';
   if (skipped !== 'incomplete') return '';
   if (reason === 'timeout') {
@@ -74,8 +76,9 @@ async function exchangeSdp(run, offer, signal) {
   return response.text();
 }
 
-async function translate(run, clip, sequence, mode = run.mode) {
+async function translate(run, clip, sequence, mode = run.mode, route) {
   const preferTranscript = performance.now() < run.preferTranscriptUntil;
+  const audioRoute = route || (preferTranscript ? 'transcript' : null);
   const response = await fetch('/api/khutbah', {
     method: 'POST',
     headers: {
@@ -84,7 +87,8 @@ async function translate(run, clip, sequence, mode = run.mode) {
       'X-Khutbah-Session': run.id,
       'X-Khutbah-Sequence': String(sequence),
       'X-Khutbah-Mode': mode,
-      ...(preferTranscript && { 'X-Khutbah-Route': 'transcript' }),
+      'X-Khutbah-Include-Source': '1',
+      ...(audioRoute && { 'X-Khutbah-Route': audioRoute }),
     },
     body: clip,
     signal: run.controller.signal,
@@ -101,15 +105,16 @@ function takePendingAudio(queue) {
   const first = queue.shift();
   const next = queue[0];
   // Only combine speech that is already waiting. Never hold the first clip for another.
-  if (next && !first.realtime && !next.realtime) {
-    const nextDuration = khutbahWavDurationMs(next.clip);
-    const gap = next.closedAt - nextDuration - first.closedAt;
-    if (gap <= 1200 && khutbahWavDurationMs(first.clip) + nextDuration <= 8000) {
-      queue.shift();
-      return { clip: joinKhutbahWav([first.clip, next.clip]), startedAt: first.startedAt, closedAt: next.closedAt };
-    }
+  if (next && !first.realtime && !next.realtime && adjacentAudio(first, next, 1200)) {
+    queue.shift();
+    return { clip: joinKhutbahWav([first.clip, next.clip]), startedAt: first.startedAt, closedAt: next.closedAt, combined: true };
   }
   return first;
+}
+
+function forgetUnfinished(run) {
+  clearTimeout(run.contextTimer);
+  run.unfinished = null;
 }
 
 function confirmsRealtimeQuote(realtime, checked) {
@@ -120,7 +125,8 @@ function confirmsRealtimeQuote(realtime, checked) {
 }
 
 async function processClip(run, entry, askOperator) {
-  const sequence = ++run.sequence;
+  const previous = run.unfinished;
+  forgetUnfinished(run);
   const signal = run.controller.signal;
   const realtime = await entry.realtime;
   signal.throwIfAborted();
@@ -130,8 +136,25 @@ async function processClip(run, entry, askOperator) {
   // Keep the next adjoining clip on source checks even if the model calls it speech.
   const adjoining = run.mode === 'auto' && entry.startedAt <= run.checkNextBefore;
   run.checkNextBefore = -Infinity;
-  if (realtime && !realtime.caption && !realtime.quran) return realtime;
+  const needsContext = realtime?.skipped === 'needs_context';
+  if (adjoining && needsContext) return { caption: '', skipped: 'unverified', checkedContinuation: true };
+  if (realtime && !realtime.caption && !realtime.quran && !needsContext) return realtime;
   const sourceCheck = run.mode === 'sources' || recognized || adjoining;
+  let triedContext = false;
+  if (!sourceCheck && adjacentAudio(previous, entry, 800)) {
+    const joined = joinKhutbahWav([previous.clip, entry.clip]);
+    const result = await translate(run, joined, ++run.sequence, 'auto', 'continuation');
+    signal.throwIfAborted();
+    if (result.caption) return { ...result, startedAt: previous.startedAt };
+    // Keep content holds intact. A failed optional model call can use an already
+    // completed independent subtitle only when the server confirms no write was attempted.
+    const canUseCurrent = ['needs_context', 'separate'].includes(result.skipped) ||
+      (result.skipped === 'context_unavailable' && Boolean(realtime?.caption));
+    if (!canUseCurrent || needsContext) return { ...result, triedContext: true };
+    triedContext = true;
+  }
+  if (needsContext) return realtime;
+  const sequence = ++run.sequence;
   if (sourceCheck) {
     // This request claims the sequence but never publishes. It transcribes the actual WAV independently.
     decision = await translate(run, entry.clip, sequence, 'sources');
@@ -147,7 +170,8 @@ async function processClip(run, entry, askOperator) {
       if (!approved) return { caption: '' };
     }
   } else if (!realtime) {
-    return translate(run, entry.clip, sequence);
+    const result = await translate(run, entry.clip, sequence);
+    return { ...result, triedContext };
   }
   if (decision.caption) {
     // The TV reads the latest row. Give it a poll between captions that finish together.
@@ -196,6 +220,7 @@ export default function LiveKhutbah() {
     run.controller.abort();
     run.answerReview?.(false);
     run.queue.length = 0;
+    forgetUnfinished(run);
     clearInterval(run.heartbeat);
     clearTimeout(run.retryTimer);
     clearTimeout(run.uploadTimer);
@@ -254,7 +279,8 @@ export default function LiveKhutbah() {
       run.queue.shift();
       setSkipped(n => n + 1);
     }
-    run.queue.push({ clip, realtime, closedAt, startedAt: closedAt - khutbahWavDurationMs(clip) });
+    run.queue.push({ clip, realtime, capture: ++run.capture, boundary: run.boundary,
+      closedAt, startedAt: closedAt - khutbahWavDurationMs(clip) });
     if (run.uploading) return;
     run.uploading = true;
     setProcessing(true);
@@ -263,7 +289,7 @@ export default function LiveKhutbah() {
         run.uploadTimer = setTimeout(() => {
           void stop(run, 'De vertaling duurde te lang. Controleer de verbinding en start de sessie opnieuw.');
         }, 55000);
-        const entry = run.mode === 'sources' ? run.queue.shift() : takePendingAudio(run.queue);
+        const entry = run.mode === 'sources' || run.unfinished ? run.queue.shift() : takePendingAudio(run.queue);
         const result = await processClip(run, entry, decision => new Promise(resolve => {
           if (!run.live) return resolve(false);
           run.answerReview = approve => {
@@ -281,13 +307,17 @@ export default function LiveKhutbah() {
         if ((result.verified || result.skipped === 'unverified') && !result.checkedContinuation) {
           run.checkNextBefore = entry.closedAt + 800;
         }
+        if (result.skipped === 'needs_context' && run.mode === 'auto' && !result.triedContext && !entry.combined) {
+          run.unfinished = entry;
+          run.contextTimer = setTimeout(() => forgetUnfinished(run), 6000);
+        }
         setClipNotice(skippedClipMessage(result));
         if (result.caption) {
           run.publishedAt = performance.now();
           const realtime = result.route === 'realtime';
           if (realtime) run.retryDelay = 10_000;
-          setPublished({ text: result.caption, delayMs: run.publishedAt - entry.startedAt,
-            route: result.verified ? 'Broncontrole' : realtime ? 'Rechtstreeks' : 'Via audiofragment' });
+          setPublished({ text: result.caption, heard: result.heard, delayMs: run.publishedAt - (result.startedAt ?? entry.startedAt),
+            route: result.verified ? 'Broncontrole' : realtime ? 'Rechtstreeks' : result.route === 'continuation' ? 'Samengevoegde zin' : 'Via audiofragment' });
         }
       }
     } catch (err) {
@@ -317,6 +347,7 @@ export default function LiveKhutbah() {
     try {
       run.realtime = await openKhutbahRealtime({
         stream: run.stream,
+        includeSpeechSource: true,
         signal: run.controller.signal,
         exchangeSdp: (offer, signal) => exchangeSdp(run, offer, signal),
         onDisconnect: () => fallback(),
@@ -331,7 +362,7 @@ export default function LiveKhutbah() {
     // A successful microphone test can become the live input without reopening it.
     const existing = active.current;
     if (existing && (existing.controller.signal.aborted || !existing.testing || !broadcast)) return;
-    const run = existing || { controller: new AbortController(), queue: [], sequence: 0, preferTranscriptUntil: 0, publishedAt: -Infinity, checkNextBefore: -Infinity, retryDelay: 10_000 };
+    const run = existing || { controller: new AbortController(), queue: [], capture: 0, boundary: 0, sequence: 0, preferTranscriptUntil: 0, publishedAt: -Infinity, checkNextBefore: -Infinity, retryDelay: 10_000 };
     active.current = run;
     run.mode = mode;
     run.testing = false;
@@ -350,7 +381,7 @@ export default function LiveKhutbah() {
           onStart: () => { run.clipConnection = run.realtime?.active ? run.realtime : null; },
           isRealtime: () => run.clipConnection?.active,
           isSourceReading: () => run.mode === 'sources',
-          onDiscard: () => { run.realtime?.discard(); },
+          onDiscard: () => { run.boundary++; run.realtime?.discard(); },
           onClip: clip => { void enqueue(run, clip); },
           onFailure: message => { void stop(run, message); },
         });
@@ -463,6 +494,12 @@ export default function LiveKhutbah() {
           <div className="rounded-lg border border-zinc-800 bg-black/60 p-4">
             <h4 className="mb-2 text-sm font-medium text-zinc-400">Laatste Nederlandse ondertiteling</h4>
             <p aria-live="polite" className="whitespace-pre-line text-lg">{published?.text || (phase === 'live' ? (processing ? 'Aan het vertalen…' : 'Wachten op spraak…') : 'Nog geen ondertiteling.')}</p>
+            {published?.heard && (
+              <details className="mt-2 text-sm text-zinc-300">
+                <summary className="cursor-pointer">Herkend Arabisch</summary>
+                <p dir="rtl" lang="ar" className="mt-1 text-lg">{published.heard}</p>
+              </details>
+            )}
             {published && (
               <p className="mt-2 text-sm text-zinc-400">
                 Begin fragment tot publicatie · {seconds.format(published.delayMs / 1000)} s · {published.route}

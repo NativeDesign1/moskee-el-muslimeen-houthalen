@@ -61,6 +61,13 @@ export function khutbahWavDurationMs(clip) {
   return (clip.size - WAV_HEADER_BYTES) * 1000 / PCM_BYTES_PER_SECOND;
 }
 
+export function adjacentAudio(first, second, maxGap) {
+  return Boolean(first && second && !first.combined && !second.combined &&
+    second.capture === first.capture + 1 && first.boundary === second.boundary &&
+    second.startedAt - first.closedAt <= maxGap &&
+    khutbahWavDurationMs(first.clip) + khutbahWavDurationMs(second.clip) <= 8000);
+}
+
 // Keep a short lead-in for soft consonants. Prefer pauses and cap continuous speech.
 export function speechSegments(rate, onClip, { onStart, onDiscard, isRealtime, isSourceReading } = {}) {
   let lead = [];

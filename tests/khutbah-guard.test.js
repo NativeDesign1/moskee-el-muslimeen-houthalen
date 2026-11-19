@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { guardKhutbahCaption, checkKhutbahSource } from '../lib/khutbah-guard.js';
+import { KHUTBAH_OUTPUT_SCHEMA, parseKhutbahOutput } from '../lib/khutbah-caption.js';
 
 const held = { caption: '', skipped: 'unverified' };
 const auto = (source, caption = 'Een verkeerde modelvertaling.', kind = 'speech') => guardKhutbahCaption({ source, caption, kind });
@@ -106,4 +107,49 @@ test('a whole verse outside the local catalog becomes a lookup request, never it
   assert.deepEqual(auto(source, 'Een verzonnen hadith.', 'hadith'), held);
   assert.deepEqual(auto('إن الصلاة تنهى عن الفحشاء', 'Een onvolledig citaat.', 'speech'), held);
   assert.deepEqual(auto('فبأي آلاء ربكما تكذبان', 'Deze regel komt meermaals voor.', 'speech'), held);
+});
+
+test('an audible unfinished ordinary clause requests context, including the standalone subtitle reported on TV', () => {
+  const needsContext = { caption: '', skipped: 'needs_context' };
+  const source = 'واللي كيشوف هاد المنظر'; // Illustrative speech for the test.
+  assert.ok(KHUTBAH_OUTPUT_SCHEMA.properties.kind.enum.includes('continuation'));
+  const value = { source, kind: 'continuation', caption: '' };
+  assert.deepEqual(parseKhutbahOutput(JSON.stringify(value)), needsContext);
+  assert.deepEqual(parseKhutbahOutput(JSON.stringify(value), 'auto', 'مشى للدار'), held);
+  for (const caption of ['En wie naar deze landelijkheid kijkt.', 'Wie naar de oude akkers kijkt', 'Maar wie op de bus wacht…']) {
+    assert.deepEqual(auto(source, caption), needsContext, caption);
+  }
+});
+
+test('preserves completed clauses, genuine questions and valid uses of the same words', () => {
+  const source = 'غادي نهضرو على الموضوع';
+  for (const caption of ['Wie kijkt naar de natuur?', 'Wie goed luistert begrijpt de uitleg.',
+    'En wie naar de akkers kijkt, ziet de eerste bloemen.', 'Wie naar buiten kijkt ziet de regen.',
+    'De landelijkheid van deze streek spreekt hem aan.', 'En wij kijken naar deze landelijkheid.']) {
+    assert.deepEqual(auto(source, caption), { caption }, caption);
+  }
+});
+
+test('a continuation cannot override source checks or recover uncertain content as ordinary speech', () => {
+  for (const source of ['قل هو الله أحد', 'لا إله إلا الله', 'قال رسول الله', 'الحمد لله', 'een gok', '']) {
+    assert.deepEqual(auto(source, '', 'continuation'), held, source);
+  }
+  const source = 'واللي كيشوف هاد المنظر';
+  assert.deepEqual(auto(source, 'De profeet zei dat', 'continuation'), held);
+  assert.deepEqual(auto(source, '', 'uncertain'), held);
+  assert.deepEqual(guardKhutbahCaption({ source, kind: 'continuation', caption: '' }, 'sources'), held);
+});
+
+test('returns the heard Arabic only when requested for an accepted ordinary caption', () => {
+  const source = 'الْيَوْم نعاون الجيران';
+  const transcript = 'اليوم نعاون الجيران';
+  const caption = 'Vandaag helpen we onze buren.';
+  const value = { kind: 'speech', caption, source };
+  const wire = JSON.stringify(value);
+  assert.deepEqual(parseKhutbahOutput(wire), { caption });
+  assert.deepEqual(parseKhutbahOutput(wire, 'auto', undefined, true, true), { caption, heard: source });
+  assert.deepEqual(parseKhutbahOutput(wire, 'auto', transcript, true, true), { caption, heard: transcript });
+  assert.deepEqual(parseKhutbahOutput(JSON.stringify({ ...value, kind: 'uncertain' }), 'auto', undefined, true, true), held);
+  assert.deepEqual(parseKhutbahOutput(JSON.stringify({ ...value, kind: 'continuation', caption: '' }), 'auto', undefined, true, true),
+    { caption: '', skipped: 'needs_context' });
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { joinKhutbahWav, khutbahWavDurationMs, speechSegments } from '../src/utils/khutbahAudio.js';
+import { adjacentAudio, joinKhutbahWav, khutbahWavDurationMs, speechSegments } from '../src/utils/khutbahAudio.js';
 
 function recorder(sampleRate = 16000, options) {
   const clips = [];
@@ -17,6 +17,21 @@ function recorder(sampleRate = 16000, options) {
     },
   };
 }
+
+test('context joins exactly two consecutive recordings within the same stretch of speech', () => {
+  const mic = recorder();
+  mic.feed(8000, 0.1);
+  const [firstWav, secondWav] = mic.clips.map(({ wav }) => wav);
+  const first = { capture: 3, boundary: 1, clip: firstWav, closedAt: 5000 };
+  const next = { capture: 4, boundary: 1, clip: secondWav, startedAt: 5100 };
+  assert.equal(adjacentAudio(first, next, 800), true);
+  for (const change of [{ capture: 5 }, { boundary: 2 }, { startedAt: 5801 }, { combined: true },
+    { clip: joinKhutbahWav([firstWav, secondWav]) }]) {
+    assert.equal(adjacentAudio(first, { ...next, ...change }, 800), false);
+  }
+  assert.equal(adjacentAudio({ ...first, combined: true }, next, 800), false);
+  assert.equal(adjacentAudio(null, next, 800), false);
+});
 
 test('sustained speech produces complete four-second mono WAV files', async () => {
   for (const rate of [16000, 44100, 48000]) {
