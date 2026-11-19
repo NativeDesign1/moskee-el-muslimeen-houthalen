@@ -130,3 +130,41 @@ test('idle audio and clicks clear the streaming buffer only between spoken clips
   assert.deepEqual(events, ['clear', 'start', 'clear', 'start']);
   assert.equal(mic.clips.length, 1);
 });
+
+test('a live phrase closes on a clear pause but keeps a brief hesitation and every spoken frame', async () => {
+  const mic = recorder(16000, { isRealtime: () => true });
+  mic.feed(480, 0.12);
+  mic.feed(200, 0);
+  mic.feed(480, 0.2);
+  mic.feed(200, 0);
+  assert.equal(mic.clips.length, 0);
+  mic.feed(40, 0);
+  assert.deepEqual(mic.clips.map(clip => clip.time), [1400]);
+  assert.equal(khutbahWavDurationMs(mic.clips[0].wav), 1400);
+  const [clip] = mic.clips;
+  const data = Buffer.from(await clip.wav.arrayBuffer());
+  assert.equal(data.readInt16LE(44), Math.round(0.12 * 32767));
+  assert.equal(data.readInt16LE(44 + 32 * 680), Math.round(0.2 * 32767));
+  assert.equal(data.readInt16LE(44 + 32 * 1160), 0);
+});
+
+test('a short live utterance waits through 360 ms of silence and closes at 400 ms', () => {
+  const mic = recorder(16000, { isRealtime: () => true });
+  mic.feed(400, 0.12);
+  mic.feed(360, 0);
+  assert.equal(mic.clips.length, 0);
+  mic.feed(40, 0);
+  assert.deepEqual(mic.clips.map(clip => clip.time), [800]);
+});
+
+test('source review keeps long recitation and soft voiced syllables together until a pause', () => {
+  const mic = recorder(16000, { isSourceReading: () => true });
+  mic.feed(3200, 0.12);
+  mic.feed(200, 0.02);
+  mic.feed(3680, 0.12);
+  mic.feed(400, 0);
+  assert.equal(mic.clips.length, 0);
+  mic.feed(40, 0);
+  mic.feed(12000, 0.12);
+  assert.deepEqual(mic.clips.map(({ wav }) => khutbahWavDurationMs(wav)), [7520, 12000]);
+});

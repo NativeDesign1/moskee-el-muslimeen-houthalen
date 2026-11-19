@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import handler from '../api/khutbah.js';
+import { checkKhutbahSource } from '../lib/khutbah-guard.js';
 
 const session = '875da112-af44-4444-b89d-6ff364304458';
 const rpcUrl = 'https://test.supabase.invalid/rest/v1/rpc/khutbah_control';
@@ -37,14 +38,26 @@ function request(body = wav(), headers = {}) {
   });
 }
 
-function modelResult(caption) {
+const transcript = 'أحسنوا إلى جيرانكم';
+const recoveredCaption = 'Wees goed voor je buren.';
+const faith = 'لا إله إلا الله';
+
+function wire(caption, source = transcript, kind = 'speech') {
+  return JSON.stringify({ kind, source, caption });
+}
+
+function modelResult(caption, source, kind) {
   return { status: 'completed', output: [{ type: 'message', content: [
-    { type: 'output_text', text: JSON.stringify({ caption }) },
+    { type: 'output_text', text: wire(caption, source, kind) },
   ] }] };
 }
 
 function audioResult(caption) {
   return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: caption } }] };
+}
+
+function directCaption(caption, source, kind) {
+  return audioResult(wire(caption, source, kind));
 }
 
 // Record actual REST requests and return responses in provider call order.
@@ -62,7 +75,7 @@ function upstream(t, ...responses) {
 
 test('one authorized audio request translates a WAV directly to a Dutch caption', async t => {
   const caption = 'Wees goed voor je buren.';
-  const calls = upstream(t, true, audioResult(caption), true);
+  const calls = upstream(t, true, directCaption(caption), true);
   const audio = wav();
   const response = await handler.fetch(request(audio));
   assert.equal(response.status, 200);
@@ -90,6 +103,7 @@ test('rejects invalid or oversized input before fetching external services', asy
     [new Request('https://moskee.invalid/api/khutbah'), 405],
     [request(wav(), { Authorization: '' }), 401],
     [request(wav(), { 'X-Khutbah-Sequence': '1.5' }), 400],
+    [request(wav(), { 'X-Khutbah-Mode': 'unknown' }), 400],
     [request(wav(), { 'Content-Type': 'text/plain' }), 415],
     [request(badWav), 400], [request(Buffer.from('RIFF')), 400],
     [request(wav({ samples: 16 * 16000 })), 413],
@@ -114,7 +128,7 @@ for (const [reason, claim, status] of [
 
 for (const [reason, level, results] of [
   ['silence', 0, []],
-  ['unclear translation', 3000, [audioResult('[GEEN_ONDERTITEL]')]],
+  ['model-reported silence', 3000, [directCaption('', '', 'silence')]],
   ['content filter', 3000, [{ choices: [{ finish_reason: 'content_filter', message: { content: 'Niet publiceren.' } }] }]],
   ['refusal', 3000, [{ choices: [{ finish_reason: 'stop', message: { refusal: '...' } }] }]],
 ]) {
@@ -128,7 +142,7 @@ for (const [reason, level, results] of [
 }
 
 test('a session stopped during translation cannot publish a late caption', async t => {
-  const calls = upstream(t, true, audioResult('Vrede.'), false);
+  const calls = upstream(t, true, directCaption('Vrede.'), false);
   const result = await handler.fetch(request());
   assert.equal(result.status, 409);
   assert.equal(calls.length, 3);
@@ -138,8 +152,6 @@ test('a session stopped during translation cannot publish a late caption', async
 const truncatedAudio = {
   choices: [{ finish_reason: 'length', message: { content: 'Dit is slechts een' } }],
 };
-const transcript = 'أحسنوا إلى جيرانكم';
-const recoveredCaption = 'Wees goed voor je buren.';
 
 test('an incomplete direct answer recovers the same clip and publishes exactly once', async t => {
   const audio = wav({ level: 4321 });
@@ -155,12 +167,12 @@ test('an incomplete direct answer recovers the same clip and publishes exactly o
   assert.ok(calls.every(call => call.signal === calls[0].signal));
 });
 
-test('a completed answer containing only a JSON caption is usable without another AI call', async t => {
-  const calls = upstream(t, true, audioResult(JSON.stringify({ caption: recoveredCaption })), true);
+test('legacy caption-only objects cannot publish and recover through the guarded transcript route', async t => {
+  const calls = upstream(t, true, audioResult(JSON.stringify({ caption: 'Ongecontroleerd.' })), { text: transcript }, modelResult(recoveredCaption), true);
   const response = await handler.fetch(request());
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { caption: recoveredCaption });
-  assert.deepEqual(calls.map(call => call.url), [rpcUrl, audioUrl, rpcUrl]);
+  assert.deepEqual(await response.json(), { caption: recoveredCaption, route: 'transcript' });
+  assert.deepEqual(JSON.parse(calls.at(-1).body).p_caption, recoveredCaption);
 });
 
 test('a client remembering the transcript route skips the direct call on the following clip', async t => {
@@ -174,7 +186,7 @@ test('a client remembering the transcript route skips the direct call on the fol
 
 test('translation accepts one complete JSON caption split across output text parts', async t => {
   const splitCaption = { status: 'completed', output: [{ type: 'message', status: 'completed', content: [
-    { type: 'output_text', text: '{"caption":"Wees goed ' },
+    { type: 'output_text', text: '{"kind":"speech","source":"' + transcript + '","caption":"Wees goed ' },
     { type: 'output_text', text: 'voor je buren."}' },
   ] }] };
   const calls = upstream(t, true, truncatedAudio, { text: transcript }, splitCaption, true);
@@ -183,6 +195,134 @@ test('translation accepts one complete JSON caption split across output text par
   assert.deepEqual(await response.json(), { caption: recoveredCaption, route: 'transcript' });
   assert.deepEqual(calls.map(call => call.url), [rpcUrl, audioUrl, transcriptionUrl, translationUrl, rpcUrl]);
 });
+
+for (const kind of ['quran', 'hadith']) {
+  test(`an unverified direct ${kind} is withheld with no paid retry or public write`, async t => {
+    const calls = upstream(t, true, directCaption('Een verzonnen citaat.', 'عبارة بلا مصدر مطابق', kind));
+    const response = await handler.fetch(request());
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified' });
+    assert.deepEqual(calls.map(call => call.url), [rpcUrl, audioUrl]);
+  });
+}
+
+test('independent STT agrees on the shahada before auto publishes only its fixed wording', async t => {
+  const canonical = checkKhutbahSource(faith, 'sources').caption;
+  assert.match(canonical, /aanbeden|aanbidding|aanbidden/i);
+  const calls = upstream(t, true, directCaption('Er is geen andere god.', faith, 'shahada'), { text: faith }, true);
+  const response = await handler.fetch(request());
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(result, { caption: canonical, verified: true, route: 'source-check' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, audioUrl, transcriptionUrl, rpcUrl]);
+  assert.deepEqual(JSON.parse(calls[3].body), { p_action: 'publish', p_session: session, p_seq: 2, p_caption: canonical });
+});
+
+test('a familiar phrase completed by the audio model is withheld when independent STT only heard a fragment', async t => {
+  const calls = upstream(t, true, directCaption('Volledige geloofsgetuigenis.', faith, 'shahada'), { text: 'لا إله' });
+  const response = await handler.fetch(request());
+  assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified', route: 'source-check' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, audioUrl, transcriptionUrl]);
+});
+
+test('a text model cannot introduce its own Arabic words even if both clauses look like ordinary speech', async t => {
+  const calls = upstream(t, true, { text: transcript }, modelResult('Wij helpen vandaag.', 'اليوم نتعاون'));
+  const response = await handler.fetch(request(wav(), { 'X-Khutbah-Route': 'transcript' }));
+  assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified', route: 'transcript' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl, translationUrl]);
+});
+
+test('source review offers an exact transcript to the operator without writing a public caption', async t => {
+  const calls = upstream(t, true, { text: faith });
+  const response = await handler.fetch(request(wav(), { 'X-Khutbah-Mode': 'sources' }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { caption: checkKhutbahSource(faith).caption, source: faith, verified: true, route: 'transcript' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl]);
+  assert.equal(JSON.parse(calls[0].body).p_action, 'claim');
+});
+
+test('source review suppresses unmatched ordinary text before generating any Dutch', async t => {
+  const calls = upstream(t, true, { text: transcript });
+  const response = await handler.fetch(request(wav(), { 'X-Khutbah-Mode': 'sources' }));
+  assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified', route: 'transcript' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl]);
+});
+
+test('the transcript recovery model cannot substitute a sacred source for ordinary speech', async t => {
+  const calls = upstream(t, true, truncatedAudio, { text: transcript }, modelResult('Verzonnen betekenis.', faith, 'shahada'));
+  const response = await handler.fetch(request());
+  assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified', route: 'transcript' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, audioUrl, transcriptionUrl, translationUrl]);
+});
+
+function quranUpstream(t, { heard, publisher, direct }) {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const href = String(url);
+    calls.push({ url: href, options });
+    if (href === rpcUrl) return Response.json(true);
+    if (href === audioUrl && direct) return Response.json(directCaption('Verzonnen vertaling.', direct, 'quran'));
+    if (href === transcriptionUrl) return Response.json({ text: heard, languages: ['ar'] });
+    if (href === 'https://quranenc.com/api/v1/translations/list/nl') {
+      return Response.json({ translations: [{ key: 'dutch_center', version: '2.0.10' }] });
+    }
+    if (publisher && href === 'https://quranenc.com/api/v1/translation/aya/dutch_center/112/' + publisher.aya) {
+      if (publisher.timeout) throw new DOMException('Timed out', 'TimeoutError');
+      return Response.json({ result: { sura: '112', footnotes: '', ...publisher } });
+    }
+    assert.fail('Unexpected request: ' + href);
+  });
+  return calls;
+}
+
+test('an independently heard Quran verse can publish only the matched publisher text in auto mode', async t => {
+  const heard = 'قل هو الله أحد';
+  const publisher = { aya: '1', id: '6222', arabic_text: 'قُلۡ هُوَ ٱللَّهُ أَحَدٌ', translation: 'Zeg: Hij is Allah, de Enige.' };
+  const calls = quranUpstream(t, { heard, direct: heard, publisher });
+  const response = await handler.fetch(request());
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(result.quran, '112:1');
+  assert.equal(result.verified, true);
+  assert.ok(result.caption.startsWith(publisher.translation));
+  assert.deepEqual(calls.slice(0, 3).map(call => call.url), [rpcUrl, audioUrl, transcriptionUrl]);
+  assert.equal(JSON.parse(calls.at(-1).options.body).p_caption, result.caption);
+});
+
+test('two individually recognized but different verses never reach the publisher or TV', async t => {
+  const calls = quranUpstream(t, { direct: 'قل هو الله أحد', heard: 'الله الصمد' });
+  const response = await handler.fetch(request());
+  assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified', route: 'source-check' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, audioUrl, transcriptionUrl]);
+});
+
+test('strict mode shows the publisher candidate only to the operator even after a cached lookup', async t => {
+  const heard = 'قل هو الله أحد';
+  const publisher = { aya: '1', id: '6222', arabic_text: 'قل هو الله أحد', translation: 'Zeg: Hij is Allah, de Enige.' };
+  const calls = quranUpstream(t, { heard, publisher });
+  const response = await handler.fetch(request(wav(), { 'X-Khutbah-Mode': 'sources' }));
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(result.quran, '112:1');
+  assert.equal(result.source, heard);
+  assert.equal(result.verified, true);
+  assert.ok(result.caption.startsWith(publisher.translation));
+  assert.deepEqual(calls.filter(call => call.url === rpcUrl).map(call => JSON.parse(call.options.body).p_action), ['claim']);
+});
+
+for (const [label, heard, publisher] of [
+  ['different publisher Arabic', 'الله الصمد', { aya: '2', id: '6223', arabic_text: 'قل هو الله أحد', translation: 'Onjuist.' }],
+  ['publisher timeout', 'لم يلد ولم يولد', { aya: '3', timeout: true }],
+]) {
+  test(`source review suppresses the Quran candidate after ${label}`, async t => {
+    const calls = quranUpstream(t, { heard, publisher });
+    const response = await handler.fetch(request(wav(), { 'X-Khutbah-Mode': 'sources' }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified', route: 'transcript' });
+    assert.ok(calls.some(call => call.url.endsWith('/112/' + publisher.aya)));
+    assert.deepEqual(calls.filter(call => call.url === rpcUrl).map(call => JSON.parse(call.options.body).p_action), ['claim']);
+  });
+}
 
 test('a request cancelled after the direct call never starts a paid fallback', async t => {
   const controller = new AbortController();
@@ -251,6 +391,7 @@ test('recovery cannot publish a caption after its session stops', async t => {
 
 for (const [reason, result] of [
   ['missing choice', { choices: [] }],
+  ['raw text', audioResult('Ongecontroleerde tekst.')],
   ['missing caption', audioResult(null)],
   ['oversized caption', audioResult('a'.repeat(481))],
   ['unexpected metadata', audioResult('{"finish_reason":"stop"}')],
@@ -314,7 +455,7 @@ test('an unavailable audio model falls back and is retried after the cooldown', 
   const calls = upstream(t,
     true, missingModel, { text: transcript }, modelResult(recoveredCaption), true,
     true, { text: '…', languages: [] },
-    true, audioResult(recoveredCaption), true,
+    true, directCaption(recoveredCaption), true,
   );
   const response = await handler.fetch(request());
   assert.equal(response.status, 200);
