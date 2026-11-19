@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { joinKhutbahWav, khutbahWavDurationMs, speechSegments } from '../src/utils/khutbahAudio.js';
+
+function recorder(sampleRate = 16000) {
+  const clips = [];
+  let time = 0;
+  const record = speechSegments(sampleRate, wav => clips.push({ time, wav }));
+  return {
+    clips,
+    feed(ms, level) {
+      const frame = new Float32Array(sampleRate * 0.04).fill(level);
+      for (let i = 0; i < ms; i += 40) {
+        time += 40;
+        record(frame, level);
+      }
+    },
+  };
+}
+
+test('sustained speech produces complete four-second mono WAV files', async () => {
+  for (const rate of [16000, 44100, 48000]) {
+    const mic = recorder(rate);
+    mic.feed(8000, 0.1);
+    assert.deepEqual(mic.clips.map(clip => clip.time), [4000, 8000]);
+    for (const { wav } of mic.clips) {
+      const data = Buffer.from(await wav.arrayBuffer());
+      assert.equal(wav.type, 'audio/wav');
+      assert.equal(data.toString('ascii', 0, 4), 'RIFF');
+      assert.equal(data.readUInt16LE(20), 1); // PCM
+      assert.equal(data.readUInt16LE(22), 1); // mono
+      assert.equal(data.readUInt32LE(24), 16000);
+      assert.equal(data.readUInt16LE(34), 16);
+      assert.equal(data.readUInt32LE(40), data.length - 44);
+      assert.equal(data.length, 44 + 4 * 16000 * 2);
+    }
+  }
+});
+
+test('keeps brief hesitations together and ends a phrase at a natural pause', () => {
+  const mic = recorder();
+  mic.feed(1000, 0.12);
+  mic.feed(160, 0);
+  mic.feed(840, 0.12);
+  mic.feed(240, 0);
+  assert.equal(mic.clips.length, 0);
+  mic.feed(40, 0);
+  assert.deepEqual(mic.clips.map(clip => clip.time), [2280]);
+});
+
+test('joining queued WAVs keeps a single valid header and chronological PCM', async () => {
+  const mic = recorder();
+  mic.feed(4000, 0.1);
+  mic.feed(4000, 0.2);
+  const clips = mic.clips.map(clip => clip.wav);
+  assert.equal(joinKhutbahWav([clips[0]]), clips[0]);
+  const merged = joinKhutbahWav(clips);
+  const bytes = Buffer.from(await merged.arrayBuffer());
+  const parts = await Promise.all(clips.map(async clip => Buffer.from(await clip.slice(44).arrayBuffer())));
+  assert.equal(merged.type, 'audio/wav');
+  assert.equal(khutbahWavDurationMs(clips[0]), 4000);
+  assert.equal(khutbahWavDurationMs(merged), 8000);
+  assert.equal(bytes.toString('ascii', 8, 16), 'WAVEfmt ');
+  assert.equal(bytes.readUInt32LE(4), bytes.length - 8);
+  assert.equal(bytes.readUInt32LE(24), 16000);
+  assert.equal(bytes.readUInt32LE(40), bytes.length - 44);
+  assert.deepEqual(bytes.subarray(44), Buffer.concat(parts));
+});
+
+test('near the duration limit, a softer break splits continuous sound without losing frames', async () => {
+  const mic = recorder();
+  mic.feed(3000, 0.1);
+  mic.feed(120, 0.017); // above the absolute speech floor
+  mic.feed(4000, 0.2);
+  assert.deepEqual(mic.clips.map(clip => clip.time), [3120, 7120]);
+
+  const samples = [];
+  for (const { wav } of mic.clips) {
+    const bytes = Buffer.from(await wav.arrayBuffer());
+    for (let offset = 44; offset < bytes.length; offset += 2) samples.push(bytes.readInt16LE(offset));
+  }
+  let offset = 0;
+  for (const [ms, level] of [[3000, 0.1], [120, 0.017], [4000, 0.2]]) {
+    const pcm = Math.round(Math.fround(level) * 32767);
+    const length = 16000 * ms / 1000;
+    assert.ok(samples.slice(offset, offset + length).every(value => value === pcm));
+    offset += length;
+  }
+  assert.equal(samples.length, offset);
+});
+
+test('silence and a brief click produce no upload; a short phrase ends after a pause', () => {
+  const mic = recorder();
+  mic.feed(600, 0);
+  mic.feed(80, 0.1);
+  mic.feed(600, 0);
+  assert.equal(mic.clips.length, 0);
+  mic.feed(800, 0.1);
+  mic.feed(520, 0);
+  assert.equal(mic.clips.length, 1);
+});

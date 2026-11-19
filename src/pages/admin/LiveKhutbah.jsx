@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import AdminLayout from './AdminLayout';
 import { supabase } from '../../supabaseClient';
-import { openKhutbahMicrophone } from '../../utils/khutbahAudio';
+import { joinKhutbahWav, khutbahWavDurationMs, openKhutbahMicrophone } from '../../utils/khutbahAudio';
 
 const TV_PATH = '/tv/khutbah';
+const seconds = new Intl.NumberFormat('nl-BE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const phaseLabels = {
   idle: 'Microfoon uit',
   opening: 'Microfoon openen…',
@@ -52,6 +53,21 @@ async function translate(run, clip) {
   return result.caption;
 }
 
+function takePendingAudio(queue) {
+  const first = queue.shift();
+  const next = queue[0];
+  // Only combine speech that is already waiting. Never hold the first clip for another.
+  if (next) {
+    const nextDuration = khutbahWavDurationMs(next.clip);
+    const gap = next.closedAt - nextDuration - first.closedAt;
+    if (gap <= 1200 && khutbahWavDurationMs(first.clip) + nextDuration <= 8000) {
+      queue.shift();
+      return { clip: joinKhutbahWav([first.clip, next.clip]), closedAt: next.closedAt };
+    }
+  }
+  return first;
+}
+
 export default function LiveKhutbah() {
   const active = useRef(null);
   const mounted = useRef(false);
@@ -60,7 +76,7 @@ export default function LiveKhutbah() {
   const [input, setInput] = useState('');
   const [level, setLevel] = useState(0);
   const [error, setError] = useState('');
-  const [caption, setCaption] = useState('');
+  const [published, setPublished] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [skipped, setSkipped] = useState(0);
 
@@ -132,7 +148,7 @@ export default function LiveKhutbah() {
       run.queue.shift();
       setSkipped(n => n + 1);
     }
-    run.queue.push(clip);
+    run.queue.push({ clip, closedAt: performance.now() });
     if (run.uploading) return;
     run.uploading = true;
     setProcessing(true);
@@ -141,9 +157,10 @@ export default function LiveKhutbah() {
         run.uploadTimer = setTimeout(() => {
           void stop(run, 'De vertaling duurde te lang. Controleer de verbinding en start de sessie opnieuw.');
         }, 55000);
-        const text = await translate(run, run.queue.shift());
+        const { clip: audio, closedAt } = takePendingAudio(run.queue);
+        const text = await translate(run, audio);
         clearTimeout(run.uploadTimer);
-        if (run.live && text) setCaption(text);
+        if (run.live && text) setPublished({ text, delayMs: performance.now() - closedAt });
       }
     } catch (err) {
       if (run.live) void stop(run, describeError(err));
@@ -164,7 +181,7 @@ export default function LiveKhutbah() {
     setPhase(broadcast ? 'starting' : 'opening');
     setError('');
     setSkipped(0);
-    setCaption('');
+    setPublished(null);
     try {
       if (!existing) {
         await openKhutbahMicrophone({
@@ -254,7 +271,12 @@ export default function LiveKhutbah() {
           <p className="break-all text-zinc-300">Open op elke tv <span className="font-medium text-white">{window.location.origin + TV_PATH}</span></p>
           <div className="rounded-lg border border-zinc-800 bg-black/60 p-4">
             <h4 className="mb-2 text-sm font-medium text-zinc-400">Laatste Nederlandse ondertiteling</h4>
-            <p aria-live="polite" className="text-lg">{caption || (phase === 'live' ? (processing ? 'Aan het vertalen…' : 'Wachten op spraak…') : 'Nog geen ondertiteling.')}</p>
+            <p aria-live="polite" className="text-lg">{published?.text || (phase === 'live' ? (processing ? 'Aan het vertalen…' : 'Wachten op spraak…') : 'Nog geen ondertiteling.')}</p>
+            {published && (
+              <p className="mt-2 text-sm text-zinc-400">
+                Tijd van einde fragment tot bevestigde publicatie · {seconds.format(published.delayMs / 1000)} s
+              </p>
+            )}
           </div>
         </section>
       </div>
