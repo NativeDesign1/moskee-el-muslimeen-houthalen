@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -21,6 +22,9 @@ import ArticleEditor from './pages/admin/ArticleEditor';
 import ActivitiesManager from './pages/admin/ActivitiesManager';
 import Analytics from './pages/admin/Analytics';
 
+const KhutbahScreen = lazy(() => import('./pages/KhutbahScreen'));
+const LiveKhutbah = lazy(() => import('./pages/admin/LiveKhutbah'));
+
 export default function App() {
   return (
     <AuthProvider>
@@ -36,9 +40,17 @@ export default function App() {
           <Route path="/kennisbank/:slug" element={<ArticleDetail />} />
           <Route path="/activiteiten" element={<Activiteiten />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/tv/khutbah" element={
+            <Suspense fallback={<p role="status">Tv-scherm laden…</p>}><KhutbahScreen /></Suspense>
+          } />
 
           {/* Admin Routes */}
           <Route path="/admin/login" element={<AdminLogin />} />
+          <Route path="/admin/live-khutbah" element={
+            <ProtectedRoute>
+              <Suspense fallback={<p role="status">Microfoonbediening laden…</p>}><LiveKhutbah /></Suspense>
+            </ProtectedRoute>
+          } />
           <Route
             path="/admin/dashboard"
             element={

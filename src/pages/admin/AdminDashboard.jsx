@@ -68,6 +68,14 @@ export default function AdminDashboard() {
           <h3 className="text-xl font-bold mb-4">Snelle Acties</h3>
           <div className="grid md:grid-cols-3 gap-4">
             <Link
+              to="/admin/live-khutbah"
+              className="bg-gradient-to-br from-primary/10 to-amber-900/10 border border-primary/30 rounded-xl p-6 hover:border-primary transition-colors"
+            >
+              <div aria-hidden="true" className="text-3xl mb-3">🎙️</div>
+              <div className="font-bold mb-1">Live khutbah</div>
+              <div className="text-sm text-zinc-400">Test de microfoon en start de Nederlandse ondertiteling op de tv.</div>
+            </Link>
+            <Link
               to="/admin/articles/new"
               className="bg-gradient-to-br from-primary/10 to-amber-900/10 border border-primary/30 rounded-xl p-6 hover:border-primary transition-colors"
             >
