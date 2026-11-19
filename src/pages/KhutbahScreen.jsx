@@ -5,7 +5,8 @@ import { supabase } from '../supabaseClient';
 
 const CAPTION_LIFETIME_MS = 30_000;
 const LIVE_POLL_MS = 600;
-const STANDBY_POLL_MS = 5000;
+const STANDBY_POLL_MS = 1500;
+const OFFLINE_RETRY_MS = 5000;
 const SIZES = { Klein: 0.035, Normaal: 0.05, Groot: 0.065 };
 const SIZE_KEY = 'khutbah.tv.lettergrootte';
 const STATUS = { connecting: 'Verbinden', idle: 'Stand-by', live: 'Live', offline: 'Geen verbinding' };
@@ -27,7 +28,7 @@ function useKhutbahDisplay() {
 
     async function refresh() {
       const started = Date.now();
-      let nextPoll = STANDBY_POLL_MS;
+      let nextPoll = OFFLINE_RETRY_MS;
       controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
       try {
@@ -49,7 +50,7 @@ function useKhutbahDisplay() {
           expiryTimer = setTimeout(() => setDisplay({ mode: 'live', caption: '' }), remaining);
         }
         // Count network time towards the live interval, leaving breathing room on slow links.
-        if (data.live) nextPoll = Math.max(200, LIVE_POLL_MS - (Date.now() - started));
+        nextPoll = data.live ? Math.max(200, LIVE_POLL_MS - (Date.now() - started)) : STANDBY_POLL_MS;
       } catch {
         if (!closed) {
           clearTimeout(expiryTimer);

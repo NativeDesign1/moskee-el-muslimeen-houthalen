@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { joinKhutbahWav, khutbahWavDurationMs, speechSegments } from '../src/utils/khutbahAudio.js';
 
-function recorder(sampleRate = 16000) {
+function recorder(sampleRate = 16000, options) {
   const clips = [];
   let time = 0;
-  const record = speechSegments(sampleRate, wav => clips.push({ time, wav }));
+  const record = speechSegments(sampleRate, wav => clips.push({ time, wav }), options);
   return {
     clips,
     feed(ms, level) {
@@ -97,5 +97,36 @@ test('silence and a brief click produce no upload; a short phrase ends after a p
   assert.equal(mic.clips.length, 0);
   mic.feed(800, 0.1);
   mic.feed(520, 0);
+  assert.equal(mic.clips.length, 1);
+});
+
+test('streaming bounds continuous audio without shortening a clip that started before connection', () => {
+  let connected = false;
+  let realtimeAtStart = false;
+  let starts = 0;
+  const mic = recorder(48000, {
+    onStart: () => { starts++; realtimeAtStart = connected; },
+    isRealtime: () => realtimeAtStart,
+  });
+  mic.feed(1000, 0.1);
+  connected = true;
+  mic.feed(3000 + 2800 + 2800, 0.1);
+  assert.equal(starts, 3);
+  assert.deepEqual(mic.clips.map(({ wav }) => khutbahWavDurationMs(wav)), [4000, 2800, 2800]);
+});
+
+test('idle audio and clicks clear the streaming buffer only between spoken clips', () => {
+  const events = [];
+  const mic = recorder(16000, {
+    isRealtime: () => true,
+    onStart: () => events.push('start'),
+    onDiscard: () => events.push('clear'),
+  });
+  mic.feed(1200, 0);
+  mic.feed(80, 0.1);
+  mic.feed(520, 0);
+  mic.feed(2400, 0.1);
+  mic.feed(280, 0);
+  assert.deepEqual(events, ['clear', 'start', 'clear', 'start']);
   assert.equal(mic.clips.length, 1);
 });
