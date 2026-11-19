@@ -149,6 +149,158 @@ test('a session stopped during translation cannot publish a late caption', async
   assert.equal((await result.json()).caption, undefined);
 });
 
+const joinedSource = 'واللي كيشوف هاد المنظر كيشوف الحقول الواسعة';
+const joinedCaption = 'Wie hier rondkijkt, ziet uitgestrekte velden.';
+const continuationHeaders = { 'X-Khutbah-Route': 'continuation', 'X-Khutbah-Include-Source': '1' };
+
+test('joined audio is transcribed in full before one standalone ordinary caption is published', async t => {
+  const calls = upstream(t, true, { text: joinedSource }, modelResult(joinedCaption, joinedSource), true);
+  const audio = wav({ samples: 32000 });
+  const response = await handler.fetch(request(audio, continuationHeaders));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { caption: joinedCaption, route: 'continuation', heard: joinedSource });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl, translationUrl, rpcUrl]);
+  assert.deepEqual(Buffer.from(await calls[1].body.get('file').arrayBuffer()), audio);
+  const input = JSON.parse(calls[2].body);
+  assert.equal(input.input, joinedSource);
+  assert.match(input.instructions, /twee opeenvolgende fragmenten/);
+  assert.ok(input.text.format.schema.properties.kind.enum.includes('separate'));
+  assert.ok(input.text.format.schema.properties.kind.enum.includes('speech'));
+  assert.deepEqual(JSON.parse(calls[3].body), { p_action: 'publish', p_session: session, p_seq: 2, p_caption: joinedCaption });
+});
+
+for (const [label, text] of [
+  ['a verse that would normally prompt a publisher lookup', 'قل هو الله أحد'],
+  ['a listed hadith', 'من غشنا فليس منا'],
+  ['the declaration of faith', faith],
+  ['an unverified prophetic attribution', 'قال النبي اليوم كلاما'],
+]) {
+  test('joining ordinary clips cannot publish ' + label, async t => {
+    const calls = upstream(t, true, { text });
+    const response = await handler.fetch(request(wav(), continuationHeaders));
+    assert.deepEqual(await response.json(), { caption: '', skipped: 'unverified', route: 'continuation' });
+    assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl]);
+  });
+}
+
+for (const [label, output, skipped] of [
+  ['unfinished Dutch', modelResult('En wie naar deze landelijkheid kijkt.', joinedSource), 'needs_context'],
+  ['another continuation', modelResult('', joinedSource, 'continuation'), 'needs_context'],
+  ['two clearly separate ordinary thoughts', modelResult('', joinedSource, 'separate'), 'separate'],
+  ['a subject change with fabricated source', modelResult('', transcript, 'separate'), 'unverified'],
+  ['a subject change carrying a caption', modelResult(joinedCaption, joinedSource, 'separate'), 'unverified'],
+  ['unrelated fragments', modelResult('', joinedSource, 'uncertain'), 'unverified'],
+  ['source words omitted by the translation model', modelResult(joinedCaption, transcript), 'unverified'],
+  ['an invented sacred classification', modelResult('Een vrije hadith.', joinedSource, 'hadith'), 'unverified'],
+  ['a refusal', { status: 'completed', output: [{ type: 'message', content: [{ type: 'refusal' }] }] }, undefined],
+]) {
+  test('joined audio returns no public or private text on ' + label, async t => {
+    const calls = upstream(t, true, { text: joinedSource }, output);
+    const response = await handler.fetch(request(wav(), continuationHeaders));
+    assert.deepEqual(await response.json(), { caption: '', ...(skipped && { skipped }), route: 'continuation' });
+    assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl, translationUrl]);
+  });
+}
+
+test('the subject-change marker is unavailable on the ordinary transcript route', async t => {
+  const calls = upstream(t, true, { text: joinedSource }, modelResult('', joinedSource, 'separate'));
+  const response = await handler.fetch(request(wav(), { 'X-Khutbah-Route': 'transcript' }));
+  assert.deepEqual(await response.json(), { caption: '', route: 'transcript', skipped: 'incomplete', stage: 'translation', reason: 'invalid_output' });
+  assert.ok(!JSON.parse(calls[2].body).text.format.schema.properties.kind.enum.includes('separate'));
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl, translationUrl]);
+});
+
+for (const [label, upstreamFailure, before] of [
+  ['transcription unavailable', new Response(null, { status: 502 }), []],
+  ['translation service lost', new Response(null, { status: 503 }), [{ text: joinedSource }]],
+  ['translation model unavailable', new Response(null, { status: 404 }), [{ text: joinedSource }]],
+  ['lost AI transport', () => { throw new TypeError('network unavailable'); }, []],
+]) {
+  test('definite provider failure before publication releases the optional context check: ' + label, async t => {
+    const calls = upstream(t, true, ...before, upstreamFailure);
+    const response = await handler.fetch(request(wav(), continuationHeaders));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { caption: '', skipped: 'context_unavailable', route: 'continuation' });
+    assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl, ...(before.length ? [translationUrl] : [])]);
+  });
+}
+
+test('deadline while transcribing a joined recording returns no text or public write', async t => {
+  const deadline = new AbortController();
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal);
+  const calls = upstream(t, true, ({ signal }) => {
+    deadline.abort(new DOMException('deadline', 'TimeoutError'));
+    signal.throwIfAborted();
+  });
+  const response = await handler.fetch(request(wav(), continuationHeaders));
+  assert.deepEqual(await response.json(), { caption: '', skipped: 'context_unavailable', route: 'continuation' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl]);
+});
+
+for (const [label, status, responses] of [
+  ['operator authorization', 403, [new Response(null, { status: 403 })]],
+  ['stale intake claim', 409, [false]],
+  ['ambiguous claim transport', 502, [() => { throw new TypeError('connection lost'); }]],
+  ['provider credentials', 503, [true, new Response(null, { status: 401 })]],
+  ['provider authorization', 503, [true, new Response(null, { status: 403 })]],
+  ['provider quota', 429, [true, new Response(null, { status: 429 })]],
+  ['ambiguous publish transport', 502, [true, { text: joinedSource }, modelResult(joinedCaption, joinedSource), () => { throw new TypeError('connection lost'); }]],
+]) {
+  test('optional context never hides a broadcast or account failure: ' + label, async t => {
+    const calls = upstream(t, ...responses);
+    const response = await handler.fetch(request(wav(), continuationHeaders));
+    assert.equal(response.status, status);
+    const body = await response.json();
+    assert.equal(body.skipped, undefined);
+    assert.equal(body.heard, undefined);
+    assert.equal(calls.length, responses.length);
+  });
+}
+
+test('caller abort during an optional context lookup stays cancelled', async t => {
+  const controller = new AbortController();
+  const calls = upstream(t, true, ({ signal }) => {
+    controller.abort();
+    signal.throwIfAborted();
+  });
+  const response = await handler.fetch(new Request(request(wav(), continuationHeaders), { signal: controller.signal }));
+  assert.equal(response.status, 504);
+  assert.equal((await response.json()).skipped, undefined);
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl]);
+});
+
+test('private Arabic preview is opt-in and never enters the public RPC for ordinary direct audio', async t => {
+  const calls = upstream(t, true, directCaption(recoveredCaption), true);
+  const response = await handler.fetch(request(wav(), { 'X-Khutbah-Include-Source': '1' }));
+  assert.deepEqual(await response.json(), { caption: recoveredCaption, heard: transcript });
+  assert.deepEqual(JSON.parse(calls.at(-1).body), { p_action: 'publish', p_session: session, p_seq: 2, p_caption: recoveredCaption });
+});
+
+test('the private preview uses the actual transcription, not the text model’s normalized spelling', async t => {
+  const spoken = 'أَحْسِنُوا إلى جيرانكم';
+  const calls = upstream(t, true, { text: spoken }, modelResult(recoveredCaption), true);
+  const response = await handler.fetch(request(wav(), { 'X-Khutbah-Include-Source': '1', 'X-Khutbah-Route': 'transcript' }));
+  assert.deepEqual(await response.json(), { caption: recoveredCaption, heard: spoken, route: 'transcript' });
+  assert.equal(JSON.parse(calls.at(-1).body).p_caption, recoveredCaption);
+});
+
+test('a lost broadcast lease returns no private Arabic after translation', async t => {
+  const calls = upstream(t, true, { text: joinedSource }, modelResult(joinedCaption, joinedSource), false);
+  const response = await handler.fetch(request(wav(), continuationHeaders));
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.equal(body.heard, undefined);
+  assert.equal(body.caption, undefined);
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl, translationUrl, rpcUrl]);
+});
+
+test('requesting recovery cannot bypass operator confirmation in source mode', async t => {
+  const calls = upstream(t, true, { text: faith });
+  const response = await handler.fetch(request(wav(), { ...continuationHeaders, 'X-Khutbah-Mode': 'sources' }));
+  assert.deepEqual(await response.json(), { caption: checkKhutbahSource(faith).caption, source: faith, verified: true, route: 'transcript' });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, transcriptionUrl]);
+});
+
 const truncatedAudio = {
   choices: [{ finish_reason: 'length', message: { content: 'Dit is slechts een' } }],
 };

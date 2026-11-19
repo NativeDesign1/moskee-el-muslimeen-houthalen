@@ -243,4 +243,10 @@ Kies vóór **Start vertaling** hoe je op de tv wilt publiceren.
 
 Spraakherkenning kan een woord verkeerd verstaan of een onaangekondigd citaat als gewone spraak behandelen. Gebruik de stand met bevestiging als elke getoonde regel door iemand moet zijn gecontroleerd.
 
+### Onvolledige zinnen en woordkeuze
+
+Bij gewone preektekst kan één gedachte over twee audiofragmenten lopen. Als het eerste deel nog geen zelfstandige zin vormt, houdt de app het kort in het geheugen van de laptop. Met het direct aansluitende fragment doet de server één nieuwe poging op basis van beide opnames. Na een lange pauze, een weggevallen fragment of het stoppen van de uitzending vervalt die mogelijkheid. Bij een geslaagde poging staat onder de ondertitel **Samengevoegde zin**. Een volledige, duidelijke zin kan meteen naar de tv.
+
+Klinkt een Nederlandse woordkeuze vreemd, open dan in de beheerpagina **Herkend Arabisch** onder de laatst gepubliceerde gewone ondertitel. Daar staat de Arabische tekst die de dienst in dat fragment heeft herkend. Zo kun je het herkende woord vergelijken met wat de imam zei. De publieke tv ontvangt alleen de Nederlandse ondertitel.
+
 Voor lokaal testen van zowel de website als de Vercel-functie gebruik je `vercel dev` met de drie omgevingsvariabelen. Met alleen `npm run dev` kun je de microfoontest en de schermpagina testen.

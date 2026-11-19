@@ -5,7 +5,7 @@ const RESPONSE_TIMEOUT_MS = 4000;
 const MAX_PENDING = 3;
 const MAX_FAILURES = 3;
 
-function completedCaption(response) {
+function completedCaption(response, includeSpeechSource) {
   if (response.status_details?.reason === 'content_filter') return { caption: '' };
   if (response.status !== 'completed' || !Array.isArray(response.output)) return null;
   const messages = response.output.filter(item => item?.type !== 'reasoning');
@@ -16,11 +16,11 @@ function completedCaption(response) {
   if (message.content.some(part => part?.type === 'refusal')) return { caption: '' };
   if (!message.content.every(part => ['text', 'output_text'].includes(part?.type) && typeof part.text === 'string')) return null;
   const text = message.content.map(part => part.text).join('').trim();
-  return parseKhutbahOutput(text, 'auto', undefined, true);
+  return parseKhutbahOutput(text, 'auto', undefined, true, includeSpeechSource);
 }
 
 // Microphone media uses WebRTC. The ordered data channel carries clip boundaries and final captions.
-export async function openKhutbahRealtime({ stream, signal, exchangeSdp, onDisconnect }) {
+export async function openKhutbahRealtime({ stream, signal, exchangeSdp, onDisconnect, includeSpeechSource = false }) {
   signal.throwIfAborted();
   const [track] = stream.getAudioTracks();
   if (!track || track.readyState === 'ended') throw new Error('De microfoon is niet beschikbaar.');
@@ -102,7 +102,7 @@ export async function openKhutbahRealtime({ stream, signal, exchangeSdp, onDisco
     } else if (event.type === 'response.done') {
       const clip = pending.get(event.response?.metadata?.clip);
       if (!clip?.item) return;
-      finish(clip, completedCaption(event.response));
+      finish(clip, completedCaption(event.response, includeSpeechSource));
     } else if (event.type === 'error') {
       // A late cleanup can target a response or input already gone.
       if (/^(cancel|delete)_\d+$/.test(event.error?.event_id)) return;
