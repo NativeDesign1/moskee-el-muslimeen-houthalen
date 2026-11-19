@@ -217,14 +217,14 @@ Open **Live khutbah** in het dashboard op de laptop die het geluid van de imam o
    on conflict do nothing;
    ```
 
-3. Voeg in de instellingen van het Vercel-project de servervariabele `OPENAI_API_KEY` toe. De sleutel heeft toegang nodig tot de modellen `gpt-transcribe` en `gpt-6-luna`. Controleer ook de bestaande `VITE_SUPABASE_URL` en `VITE_SUPABASE_ANON_KEY`. Gebruik voor een preview de variabelen van het bijbehorende Supabase-project. Maak na het instellen een nieuwe deployment.
+3. Voeg in de instellingen van het Vercel-project de servervariabele `OPENAI_API_KEY` toe. Voor de snelste route vertaalt `gpt-audio-1.5` de audio rechtstreeks naar Nederlandse tekst. Als het project geen toegang tot dit model heeft, kan de module terugvallen op `gpt-transcribe` en `gpt-6-luna`. Voor de rechtstreekse route gelden de [tarieven voor audio-invoer en tekstuitvoer](https://developers.openai.com/api/docs/models/gpt-audio-1.5). Controleer ook de bestaande `VITE_SUPABASE_URL` en `VITE_SUPABASE_ANON_KEY`. Gebruik voor een preview de variabelen van het bijbehorende Supabase-project. Maak na het instellen een nieuwe deployment.
 4. Open `/tv/khutbah` op elke tv en zet de browser op volledig scherm. Iedereen met die URL kan de actuele ondertiteling lezen. De lettergrootte is per tv instelbaar.
 
 ### Voor en tijdens de vrijdagpreek
 
 1. Sluit de USB-audio-uitgang van het mengpaneel of een USB-audio-interface met een lijnsignaal van het mengpaneel aan op de laptop. Een ingebouwde microfoon werkt ook voor een eerste proef.
 2. Open `/admin/live-khutbah` via HTTPS, geef de browser toegang tot de microfoon en kies de juiste geluidsingang. Spreek in de microfoon van de imam en controleer of de niveaumeter reageert. De microfoontest werkt lokaal.
-3. Start de vertaling en houd de beheerpagina open op een actieve laptop. Tijdens de uitzending gaan korte audiofragmenten voor spraakherkenning en vertaling naar OpenAI. De moskeewebsite bewaart geen audioarchief. Supabase houdt één actuele ondertitel bij. Stoppen wist deze regel. Bij een verbroken verbinding vervalt de uitzending na ongeveer een minuut.
+3. Start de vertaling en houd de beheerpagina open op een actieve laptop. Tijdens de uitzending gaan korte audiofragmenten voor spraakherkenning en vertaling naar OpenAI. De moskeewebsite bewaart geen audioarchief. Onder de laatste ondertitel in de admin zie je hoeveel tijd er zit tussen het afsluiten van het audiofragment en de bevestiging van publicatie. Op de tv kan daar nog een korte ophaalvertraging bij komen. Supabase houdt één actuele ondertitel bij. Stoppen wist deze regel. Bij een verbroken verbinding vervalt de uitzending na ongeveer een minuut.
 4. Wacht na de laatste woorden tot de ondertitel verschijnt en klik op **Stop vertaling**. Stoppen sluit de microfoon direct en annuleert eventuele resterende fragmenten. Bij onduidelijke of gemiste spraak kan een ondertitel wegvallen. Test vóór de eerste vrijdag met een korte preek waarin de imam tussen Darija en Fusha wisselt, liefst met iemand die beide verstaat.
 
 Voor lokaal testen van zowel de website als de Vercel-functie gebruik je `vercel dev` met de drie omgevingsvariabelen. Met alleen `npm run dev` kun je de microfoontest en de schermpagina testen.

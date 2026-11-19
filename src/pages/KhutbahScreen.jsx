@@ -4,6 +4,8 @@ import { MOSQUE } from '../config';
 import { supabase } from '../supabaseClient';
 
 const CAPTION_LIFETIME_MS = 30_000;
+const LIVE_POLL_MS = 600;
+const STANDBY_POLL_MS = 5000;
 const SIZES = { Klein: 0.035, Normaal: 0.05, Groot: 0.065 };
 const SIZE_KEY = 'khutbah.tv.lettergrootte';
 const STATUS = { connecting: 'Verbinden', idle: 'Stand-by', live: 'Live', offline: 'Geen verbinding' };
@@ -25,7 +27,7 @@ function useKhutbahDisplay() {
 
     async function refresh() {
       const started = Date.now();
-      let nextPoll = 5000;
+      let nextPoll = STANDBY_POLL_MS;
       controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
       try {
@@ -42,11 +44,12 @@ function useKhutbahDisplay() {
         const caption = data.live && remaining > 0 && typeof data.caption === 'string'
           ? data.caption.trim()
           : '';
-        setDisplay({ mode, caption });
+        setDisplay(previous => previous.mode === mode && previous.caption === caption ? previous : { mode, caption });
         if (caption) {
           expiryTimer = setTimeout(() => setDisplay({ mode: 'live', caption: '' }), remaining);
         }
-        if (data.live) nextPoll = 2000;
+        // Count network time towards the live interval, leaving breathing room on slow links.
+        if (data.live) nextPoll = Math.max(200, LIVE_POLL_MS - (Date.now() - started));
       } catch {
         if (!closed) {
           clearTimeout(expiryTimer);

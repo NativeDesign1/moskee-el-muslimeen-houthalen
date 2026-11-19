@@ -1,5 +1,29 @@
 const OUTPUT_RATE = 16000;
 const FRAME_MS = 40;
+const SPEECH_FLOOR = 0.004;
+const MAX_CLIP_MS = 4000;
+const WAV_HEADER_BYTES = 44;
+const PCM_BYTES_PER_SECOND = OUTPUT_RATE * 2;
+
+function wavHeader(dataBytes) {
+  const header = new DataView(new ArrayBuffer(WAV_HEADER_BYTES));
+  function writeText(position, value) {
+    for (let i = 0; i < value.length; i++) header.setUint8(position + i, value.charCodeAt(i));
+  }
+  writeText(0, 'RIFF');
+  header.setUint32(4, 36 + dataBytes, true);
+  writeText(8, 'WAVEfmt ');
+  header.setUint32(16, 16, true);
+  header.setUint16(20, 1, true);
+  header.setUint16(22, 1, true);
+  header.setUint32(24, OUTPUT_RATE, true);
+  header.setUint32(28, PCM_BYTES_PER_SECOND, true);
+  header.setUint16(32, 2, true);
+  header.setUint16(34, 16, true);
+  writeText(36, 'data');
+  header.setUint32(40, dataBytes, true);
+  return header.buffer;
+}
 
 // Each upload is an independent mono PCM file, including its own WAV header.
 function encodeWav(frames, rate) {
@@ -13,32 +37,28 @@ function encodeWav(frames, rate) {
 
   const ratio = rate / OUTPUT_RATE;
   const count = Math.floor(size / ratio);
-  const header = new DataView(new ArrayBuffer(44 + count * 2));
-  function writeText(position, value) {
-    for (let i = 0; i < value.length; i++) header.setUint8(position + i, value.charCodeAt(i));
-  }
-  writeText(0, 'RIFF');
-  header.setUint32(4, 36 + count * 2, true);
-  writeText(8, 'WAVEfmt ');
-  header.setUint32(16, 16, true);
-  header.setUint16(20, 1, true);
-  header.setUint16(22, 1, true);
-  header.setUint32(24, OUTPUT_RATE, true);
-  header.setUint32(28, OUTPUT_RATE * 2, true);
-  header.setUint16(32, 2, true);
-  header.setUint16(34, 16, true);
-  writeText(36, 'data');
-  header.setUint32(40, count * 2, true);
-
+  const pcm = new DataView(new ArrayBuffer(count * 2));
   for (let i = 0; i < count; i++) {
     const start = Math.floor(i * ratio);
     const end = Math.max(start + 1, Math.floor((i + 1) * ratio));
     let sum = 0;
     for (let j = start; j < end; j++) sum += samples[j];
     const value = Math.max(-1, Math.min(1, sum / (end - start)));
-    header.setInt16(44 + i * 2, Math.round(value * (value < 0 ? 32768 : 32767)), true);
+    pcm.setInt16(i * 2, Math.round(value * (value < 0 ? 32768 : 32767)), true);
   }
-  return new Blob([header.buffer], { type: 'audio/wav' });
+  return new Blob([wavHeader(pcm.byteLength), pcm.buffer], { type: 'audio/wav' });
+}
+
+// Combine waiting clips in order without decoding or resampling their PCM.
+export function joinKhutbahWav(clips) {
+  if (clips.length === 1) return clips[0];
+  const payloads = clips.map(clip => clip.slice(WAV_HEADER_BYTES));
+  const bytes = payloads.reduce((total, part) => total + part.size, 0);
+  return new Blob([wavHeader(bytes), ...payloads], { type: 'audio/wav' });
+}
+
+export function khutbahWavDurationMs(clip) {
+  return (clip.size - WAV_HEADER_BYTES) * 1000 / PCM_BYTES_PER_SECOND;
 }
 
 // Keep a short lead-in for soft consonants. Prefer pauses and cap continuous speech.
@@ -47,9 +67,11 @@ export function speechSegments(rate, onClip) {
   let frames = [];
   let voicedMs = 0;
   let quietMs = 0;
+  let softMs = 0;
+  let voiceLevel = 0;
 
   return (frame, rms) => {
-    const speech = rms >= 0.004;
+    const speech = rms >= SPEECH_FLOOR;
     if (!frames.length && !speech) {
       lead.push(frame);
       if (lead.length > 4) lead.shift();
@@ -60,14 +82,23 @@ export function speechSegments(rate, onClip) {
       lead = [];
     }
     frames.push(frame);
-    if (speech) voicedMs += FRAME_MS;
+    // A breath can stay above the silence floor on a loud mixer feed.
+    softMs = rms < Math.max(SPEECH_FLOOR, voiceLevel * 0.3) ? softMs + FRAME_MS : 0;
+    if (speech) {
+      voiceLevel += (rms - voiceLevel) * 0.1;
+      voicedMs += FRAME_MS;
+    }
     quietMs = speech ? 0 : quietMs + FRAME_MS;
     const duration = frames.length * FRAME_MS;
-    if (duration >= 8000 || quietMs >= 840 || (duration >= 2800 && quietMs >= 400)) {
+    const phraseEnded = quietMs >= (duration >= 1800 ? 280 : 520);
+    const softBreak = duration >= 3000 && softMs >= 120;
+    if (phraseEnded || softBreak || duration >= MAX_CLIP_MS) {
       if (voicedMs >= 160) onClip(encodeWav(frames, rate));
       frames = [];
       quietMs = 0;
       voicedMs = 0;
+      softMs = 0;
+      voiceLevel = 0;
     }
   };
 }

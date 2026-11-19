@@ -40,6 +40,12 @@ function modelResult(caption) {
   ] }] };
 }
 
+function audioResult(caption) {
+  return { choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [
+    { type: 'function', function: { name: 'ondertitel', arguments: JSON.stringify({ caption }) } },
+  ] } }] };
+}
+
 // Record actual REST requests and return responses in provider call order.
 function upstream(t, ...responses) {
   const calls = [];
@@ -52,25 +58,24 @@ function upstream(t, ...responses) {
   return calls;
 }
 
-test('an authorized WAV fragment is transcribed and only the Dutch caption is published', async t => {
+test('one authorized audio request translates a WAV directly to a Dutch caption', async t => {
   const caption = 'Wees goed voor je buren.';
-  const transcript = 'أحسنوا إلى جيرانكم';
-  const calls = upstream(t, true, { text: transcript }, modelResult(caption), true);
+  const calls = upstream(t, true, audioResult(caption), true);
   const audio = wav();
   const response = await handler.fetch(request(audio));
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.deepEqual(await response.json(), { caption });
-  assert.deepEqual(calls.map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/audio/transcriptions', 'https://api.openai.com/v1/responses', rpcUrl]);
-  assert.deepEqual(calls.map(call => call.headers.Authorization), ['Bearer user-test', 'Bearer server-key-test', 'Bearer server-key-test', 'Bearer user-test']);
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/chat/completions', rpcUrl]);
+  assert.deepEqual(calls.map(call => call.headers.Authorization), ['Bearer user-test', 'Bearer server-key-test', 'Bearer user-test']);
   assert.equal(calls[0].headers.apikey, 'public-test');
   assert.deepEqual(JSON.parse(calls[0].body), { p_action: 'claim', p_session: session, p_seq: 2 });
-  assert.equal(calls[1].body.get('model'), 'gpt-transcribe');
-  assert.equal(calls[1].body.get('languages[]'), 'ar');
-  assert.deepEqual(Buffer.from(await calls[1].body.get('file').arrayBuffer()), audio);
-  assert.equal(JSON.parse(calls[2].body).input, transcript);
-  assert.equal(JSON.parse(calls[2].body).store, false);
-  assert.deepEqual(JSON.parse(calls[3].body), { p_action: 'publish', p_session: session, p_seq: 2, p_caption: caption });
+  const payload = JSON.parse(calls[1].body);
+  assert.equal(payload.model, 'gpt-audio-1.5');
+  assert.equal(payload.store, false);
+  assert.deepEqual(payload.modalities, ['text']);
+  assert.deepEqual(payload.messages[1].content, [{ type: 'input_audio', input_audio: { format: 'wav', data: audio.toString('base64') } }]);
+  assert.deepEqual(JSON.parse(calls[2].body), { p_action: 'publish', p_session: session, p_seq: 2, p_caption: caption });
 });
 
 test('rejects invalid or oversized input before fetching external services', async t => {
@@ -104,9 +109,9 @@ for (const [reason, claim, status] of [
 }
 
 for (const [reason, level, results] of [
-  ['silence', 0, []], ['empty transcript', 3000, [{ text: ' ' }]],
-  ['undetected input language', 3000, [{ text: '…', languages: [] }]],
-  ['unclear translation', 3000, [{ text: '…' }, modelResult('')]],
+  ['silence', 0, []],
+  ['unclear translation', 3000, [audioResult('')]],
+  ['refusal', 3000, [{ choices: [{ finish_reason: 'stop', message: { refusal: '...' } }] }]],
 ]) {
   test(`skips ${reason} without publishing`, async t => {
     const calls = upstream(t, true, ...results);
@@ -118,16 +123,56 @@ for (const [reason, level, results] of [
 }
 
 test('a session stopped during translation cannot publish a late caption', async t => {
-  const calls = upstream(t, true, { text: 'السلام' }, modelResult('Vrede.'), false);
+  const calls = upstream(t, true, audioResult('Vrede.'), false);
   const result = await handler.fetch(request());
   assert.equal(result.status, 409);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 3);
   assert.equal((await result.json()).caption, undefined);
 });
 
-test('an incomplete AI response is never published', async t => {
-  const calls = upstream(t, true, { text: 'السلام' }, { ...modelResult('Vrede.'), status: 'incomplete' });
-  const result = await handler.fetch(request());
-  assert.equal(result.status, 502);
-  assert.equal(calls.length, 3);
+for (const [reason, result, status] of [
+  ['truncated', { choices: [{ ...audioResult('Vrede.').choices[0], finish_reason: 'length' }] }, 502],
+  ['oversized', audioResult('a'.repeat(481)), 502],
+  ['rate limited', new Response(null, { status: 429 }), 429],
+  ['provider timeout', new Response(null, { status: 503 }), 502],
+]) {
+  test(`${reason} results trigger neither a publication nor a second AI request`, async t => {
+    const calls = upstream(t, true, result);
+    assert.equal((await handler.fetch(request())).status, status);
+    assert.equal(calls.length, 2);
+  });
+}
+
+test('an unavailable audio model falls back and is retried after the cooldown', async t => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const caption = 'Wees goed voor je buren.';
+  const transcript = 'أحسنوا إلى جيرانكم';
+  const missingModel = Response.json({ error: { code: 'model_not_found' } }, { status: 404 });
+  const calls = upstream(t,
+    true, missingModel, { text: transcript }, modelResult(caption), true,
+    true, { text: '', languages: [] },
+    true, { text: '…', languages: [] },
+    true, audioResult(caption), true,
+  );
+  const response = await handler.fetch(request());
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { caption });
+  assert.deepEqual(calls.map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/chat/completions',
+    'https://api.openai.com/v1/audio/transcriptions', 'https://api.openai.com/v1/responses', rpcUrl]);
+  assert.equal(calls[2].body.get('model'), 'gpt-transcribe');
+  assert.equal(calls[2].body.get('languages[]'), 'ar');
+  assert.deepEqual(Buffer.from(await calls[2].body.get('file').arrayBuffer()), wav());
+  assert.equal(JSON.parse(calls[3].body).input, transcript);
+  assert.equal(JSON.parse(calls[3].body).store, false);
+  for (const sequence of ['3', '4']) {
+    const skipped = await handler.fetch(request(wav(), { 'X-Khutbah-Sequence': sequence }));
+    assert.deepEqual(await skipped.json(), { caption: '' });
+  }
+  assert.deepEqual(calls.slice(5).map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/audio/transcriptions',
+    rpcUrl, 'https://api.openai.com/v1/audio/transcriptions']);
+  now += 5 * 60_000 + 1;
+  const recovered = await handler.fetch(request(wav(), { 'X-Khutbah-Sequence': '5' }));
+  assert.deepEqual(await recovered.json(), { caption });
+  assert.deepEqual(calls.slice(9).map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/chat/completions', rpcUrl]);
 });
