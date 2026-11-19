@@ -23,6 +23,21 @@ function describeError(error) {
   return error?.message || 'De live vertaling is onderbroken. Probeer opnieuw.';
 }
 
+function skippedClipMessage({ skipped, stage, reason }) {
+  if (skipped !== 'incomplete') return '';
+  if (reason === 'timeout') {
+    if (stage === 'transcription') return 'De spraakherkenning van dit fragment duurde te lang.';
+    if (stage === 'translation') return 'De Nederlandse vertaling van dit fragment duurde te lang.';
+  }
+  if (stage === 'transcription') return 'De spraakherkenning leverde voor dit fragment geen bruikbare tekst op.';
+  if (stage === 'translation') {
+    if (reason === 'output_limit') return 'De Nederlandse vertaling werd afgekapt bij de lengtelimiet.';
+    if (reason === 'invalid_output') return 'De vertaaldienst gaf een onbruikbare Nederlandse ondertitel terug.';
+    return 'De spraak is herkend, maar de Nederlandse ondertitel ontbreekt of is onvolledig.';
+  }
+  return 'Eén fragment is overgeslagen omdat de vertaling onvolledig was.';
+}
+
 async function control(sessionId, action) {
   const { data, error } = await supabase.rpc('khutbah_control', {
     p_action: action,
@@ -42,6 +57,7 @@ async function translate(run, clip) {
       'Content-Type': 'audio/wav',
       'X-Khutbah-Session': run.id,
       'X-Khutbah-Sequence': String(++run.sequence),
+      ...(run.route === 'transcript' && { 'X-Khutbah-Route': 'transcript' }),
     },
     body: clip,
     signal: run.controller.signal,
@@ -79,7 +95,7 @@ export default function LiveKhutbah() {
   const [published, setPublished] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [skipped, setSkipped] = useState(0);
-  const [lastClipIncomplete, setLastClipIncomplete] = useState(false);
+  const [clipNotice, setClipNotice] = useState('');
 
   async function refreshDevices() {
     try {
@@ -162,7 +178,8 @@ export default function LiveKhutbah() {
         const result = await translate(run, audio);
         clearTimeout(run.uploadTimer);
         if (!run.live) break;
-        setLastClipIncomplete(result.skipped === 'incomplete');
+        if (result.route === 'transcript') run.route = 'transcript';
+        setClipNotice(skippedClipMessage(result));
         if (result.caption) setPublished({ text: result.caption, delayMs: performance.now() - closedAt });
       }
     } catch (err) {
@@ -184,7 +201,7 @@ export default function LiveKhutbah() {
     setPhase(broadcast ? 'starting' : 'opening');
     setError('');
     setSkipped(0);
-    setLastClipIncomplete(false);
+    setClipNotice('');
     setPublished(null);
     try {
       if (!existing) {
@@ -264,8 +281,8 @@ export default function LiveKhutbah() {
             )}
           </div>
           {error && <p role="alert" className="rounded-lg border border-red-800 bg-red-950/40 p-3 text-red-200">{error}</p>}
-          {phase === 'live' && lastClipIncomplete && (
-            <p role="status" className="text-amber-300">Eén fragment is overgeslagen omdat de vertaling onvolledig was. De microfoon blijft luisteren.</p>
+          {phase === 'live' && clipNotice && (
+            <p role="status" className="text-amber-300">{clipNotice} De microfoon blijft luisteren.</p>
           )}
           {skipped > 0 && <p role="status" className="text-amber-300">Door vertraging overgeslagen fragmenten: {skipped}.</p>}
         </section>
