@@ -50,7 +50,7 @@ async function translate(run, clip) {
   if (!response.ok || typeof result?.caption !== 'string') {
     throw new Error(typeof result?.error === 'string' ? result.error : 'De vertaalservice is niet bereikbaar. Controleer de serverinstellingen en probeer opnieuw.');
   }
-  return result.caption;
+  return result;
 }
 
 function takePendingAudio(queue) {
@@ -79,6 +79,7 @@ export default function LiveKhutbah() {
   const [published, setPublished] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [skipped, setSkipped] = useState(0);
+  const [lastClipIncomplete, setLastClipIncomplete] = useState(false);
 
   async function refreshDevices() {
     try {
@@ -158,9 +159,11 @@ export default function LiveKhutbah() {
           void stop(run, 'De vertaling duurde te lang. Controleer de verbinding en start de sessie opnieuw.');
         }, 55000);
         const { clip: audio, closedAt } = takePendingAudio(run.queue);
-        const text = await translate(run, audio);
+        const result = await translate(run, audio);
         clearTimeout(run.uploadTimer);
-        if (run.live && text) setPublished({ text, delayMs: performance.now() - closedAt });
+        if (!run.live) break;
+        setLastClipIncomplete(result.skipped === 'incomplete');
+        if (result.caption) setPublished({ text: result.caption, delayMs: performance.now() - closedAt });
       }
     } catch (err) {
       if (run.live) void stop(run, describeError(err));
@@ -181,6 +184,7 @@ export default function LiveKhutbah() {
     setPhase(broadcast ? 'starting' : 'opening');
     setError('');
     setSkipped(0);
+    setLastClipIncomplete(false);
     setPublished(null);
     try {
       if (!existing) {
@@ -260,6 +264,9 @@ export default function LiveKhutbah() {
             )}
           </div>
           {error && <p role="alert" className="rounded-lg border border-red-800 bg-red-950/40 p-3 text-red-200">{error}</p>}
+          {phase === 'live' && lastClipIncomplete && (
+            <p role="status" className="text-amber-300">Eén fragment is overgeslagen omdat de vertaling onvolledig was. De microfoon blijft luisteren.</p>
+          )}
           {skipped > 0 && <p role="status" className="text-amber-300">Door vertraging overgeslagen fragmenten: {skipped}.</p>}
         </section>
 

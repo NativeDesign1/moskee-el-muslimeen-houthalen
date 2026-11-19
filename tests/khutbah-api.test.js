@@ -41,9 +41,7 @@ function modelResult(caption) {
 }
 
 function audioResult(caption) {
-  return { choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [
-    { type: 'function', function: { name: 'ondertitel', arguments: JSON.stringify({ caption }) } },
-  ] } }] };
+  return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: caption } }] };
 }
 
 // Record actual REST requests and return responses in provider call order.
@@ -74,6 +72,8 @@ test('one authorized audio request translates a WAV directly to a Dutch caption'
   assert.equal(payload.model, 'gpt-audio-1.5');
   assert.equal(payload.store, false);
   assert.deepEqual(payload.modalities, ['text']);
+  assert.equal(payload.tools, undefined);
+  assert.equal(payload.tool_choice, undefined);
   assert.deepEqual(payload.messages[1].content, [{ type: 'input_audio', input_audio: { format: 'wav', data: audio.toString('base64') } }]);
   assert.deepEqual(JSON.parse(calls[2].body), { p_action: 'publish', p_session: session, p_seq: 2, p_caption: caption });
 });
@@ -110,7 +110,8 @@ for (const [reason, claim, status] of [
 
 for (const [reason, level, results] of [
   ['silence', 0, []],
-  ['unclear translation', 3000, [audioResult('')]],
+  ['unclear translation', 3000, [audioResult('[GEEN_ONDERTITEL]')]],
+  ['content filter', 3000, [{ choices: [{ finish_reason: 'content_filter', message: { content: 'Niet publiceren.' } }] }]],
   ['refusal', 3000, [{ choices: [{ finish_reason: 'stop', message: { refusal: '...' } }] }]],
 ]) {
   test(`skips ${reason} without publishing`, async t => {
@@ -130,9 +131,36 @@ test('a session stopped during translation cannot publish a late caption', async
   assert.equal((await result.json()).caption, undefined);
 });
 
+test('an incomplete clip does not publish partial output and the next clip can publish', async t => {
+  const truncated = { choices: [{ finish_reason: 'length', message: { content: 'Dit is slechts een' } }] };
+  const calls = upstream(t, true, truncated, true, audioResult('Heb geduld.'), true);
+  const first = await handler.fetch(request());
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), { caption: '', skipped: 'incomplete' });
+  assert.equal(calls.length, 2);
+  const next = await handler.fetch(request(wav(), { 'X-Khutbah-Sequence': '3' }));
+  assert.equal(next.status, 200);
+  assert.deepEqual(await next.json(), { caption: 'Heb geduld.' });
+  assert.deepEqual(JSON.parse(calls.at(-1).body), { p_action: 'publish', p_session: session, p_seq: 3, p_caption: 'Heb geduld.' });
+});
+
+for (const [reason, result] of [
+  ['missing choice', { choices: [] }],
+  ['missing caption', audioResult(null)],
+  ['oversized caption', audioResult('a'.repeat(481))],
+  ['unexpected metadata', audioResult('{"finish_reason":"stop"}')],
+  ['unexpected tool output', { choices: [{ finish_reason: 'tool_calls', message: { content: 'Metadata' } }] }],
+]) {
+  test(`skips ${reason} without a retry or publication`, async t => {
+    const calls = upstream(t, true, result);
+    const response = await handler.fetch(request());
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { caption: '', skipped: 'incomplete' });
+    assert.equal(calls.length, 2);
+  });
+}
+
 for (const [reason, result, status] of [
-  ['truncated', { choices: [{ ...audioResult('Vrede.').choices[0], finish_reason: 'length' }] }, 502],
-  ['oversized', audioResult('a'.repeat(481)), 502],
   ['rate limited', new Response(null, { status: 429 }), 429],
   ['provider timeout', new Response(null, { status: 503 }), 502],
 ]) {
@@ -153,6 +181,8 @@ test('an unavailable audio model falls back and is retried after the cooldown', 
     true, missingModel, { text: transcript }, modelResult(caption), true,
     true, { text: '', languages: [] },
     true, { text: '…', languages: [] },
+    true, { text: transcript }, { status: 'incomplete', output: modelResult('Gedeeltelijk.').output },
+    true, { text: transcript }, { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '{' }] }] },
     true, audioResult(caption), true,
   );
   const response = await handler.fetch(request());
@@ -171,8 +201,14 @@ test('an unavailable audio model falls back and is retried after the cooldown', 
   }
   assert.deepEqual(calls.slice(5).map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/audio/transcriptions',
     rpcUrl, 'https://api.openai.com/v1/audio/transcriptions']);
+  for (const sequence of ['5', '6']) {
+    const skipped = await handler.fetch(request(wav(), { 'X-Khutbah-Sequence': sequence }));
+    assert.equal(skipped.status, 200);
+    assert.deepEqual(await skipped.json(), { caption: '', skipped: 'incomplete' });
+  }
+  assert.equal(calls.length, 15);
   now += 5 * 60_000 + 1;
-  const recovered = await handler.fetch(request(wav(), { 'X-Khutbah-Sequence': '5' }));
+  const recovered = await handler.fetch(request(wav(), { 'X-Khutbah-Sequence': '7' }));
   assert.deepEqual(await recovered.json(), { caption });
-  assert.deepEqual(calls.slice(9).map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/chat/completions', rpcUrl]);
+  assert.deepEqual(calls.slice(15).map(call => call.url), [rpcUrl, 'https://api.openai.com/v1/chat/completions', rpcUrl]);
 });
