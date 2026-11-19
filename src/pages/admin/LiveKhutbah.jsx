@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import AdminLayout from './AdminLayout';
 import { supabase } from '../../supabaseClient';
 import { joinKhutbahWav, khutbahWavDurationMs, openKhutbahMicrophone } from '../../utils/khutbahAudio';
+import { openKhutbahRealtime } from '../../utils/khutbahRealtime';
 
 const TV_PATH = '/tv/khutbah';
 const seconds = new Intl.NumberFormat('nl-BE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -38,26 +39,48 @@ function skippedClipMessage({ skipped, stage, reason }) {
   return 'Eén fragment is overgeslagen omdat de vertaling onvolledig was.';
 }
 
-async function control(sessionId, action) {
+async function control(sessionId, action, parameters = {}, signal) {
   const { data, error } = await supabase.rpc('khutbah_control', {
     p_action: action,
     p_session: sessionId,
-  }).abortSignal(AbortSignal.timeout(10000));
+    ...parameters,
+  }).abortSignal(signal || AbortSignal.timeout(10000));
   if (error) throw error;
   if (data !== true) throw new Error('Deze sessie is niet meer actief. Start de vertaling opnieuw.');
 }
 
-async function translate(run, clip) {
+async function authHeader() {
   const { data, error } = await supabase.auth.getSession();
   if (error || !data.session) throw new Error('Je bent uitgelogd. Meld je opnieuw aan om de vertaling te starten.');
+  return 'Bearer ' + data.session.access_token;
+}
+
+async function exchangeSdp(run, offer, signal) {
+  const response = await fetch('/api/khutbah-realtime', {
+    method: 'POST',
+    headers: { Authorization: await authHeader(), 'Content-Type': 'application/sdp', 'X-Khutbah-Session': run.id },
+    body: offer,
+    signal,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const error = new Error(body?.error || 'De rechtstreekse audioverbinding is niet beschikbaar.');
+    error.status = response.status;
+    throw error;
+  }
+  return response.text();
+}
+
+async function translate(run, clip, sequence) {
+  const preferTranscript = performance.now() < run.preferTranscriptUntil;
   const response = await fetch('/api/khutbah', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + data.session.access_token,
+      Authorization: await authHeader(),
       'Content-Type': 'audio/wav',
       'X-Khutbah-Session': run.id,
-      'X-Khutbah-Sequence': String(++run.sequence),
-      ...(run.route === 'transcript' && { 'X-Khutbah-Route': 'transcript' }),
+      'X-Khutbah-Sequence': String(sequence),
+      ...(preferTranscript && { 'X-Khutbah-Route': 'transcript' }),
     },
     body: clip,
     signal: run.controller.signal,
@@ -66,6 +89,7 @@ async function translate(run, clip) {
   if (!response.ok || typeof result?.caption !== 'string') {
     throw new Error(typeof result?.error === 'string' ? result.error : 'De vertaalservice is niet bereikbaar. Controleer de serverinstellingen en probeer opnieuw.');
   }
+  if (!preferTranscript && result.route === 'transcript') run.preferTranscriptUntil = performance.now() + 60_000;
   return result;
 }
 
@@ -73,15 +97,33 @@ function takePendingAudio(queue) {
   const first = queue.shift();
   const next = queue[0];
   // Only combine speech that is already waiting. Never hold the first clip for another.
-  if (next) {
+  if (next && !first.realtime && !next.realtime) {
     const nextDuration = khutbahWavDurationMs(next.clip);
     const gap = next.closedAt - nextDuration - first.closedAt;
     if (gap <= 1200 && khutbahWavDurationMs(first.clip) + nextDuration <= 8000) {
       queue.shift();
-      return { clip: joinKhutbahWav([first.clip, next.clip]), closedAt: next.closedAt };
+      return { clip: joinKhutbahWav([first.clip, next.clip]), startedAt: first.startedAt };
     }
   }
   return first;
+}
+
+async function processClip(run, entry) {
+  const sequence = ++run.sequence;
+  const signal = run.controller.signal;
+  const caption = await entry.realtime;
+  signal.throwIfAborted();
+  if (typeof caption !== 'string') return translate(run, entry.clip, sequence);
+  if (caption) {
+    // The TV reads the latest row. Give it a poll between captions that finish together.
+    const remaining = run.publishedAt + 850 - performance.now();
+    if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+    signal.throwIfAborted();
+    const parameters = { p_seq: sequence };
+    await control(run.id, 'claim', parameters, signal);
+    await control(run.id, 'publish', { ...parameters, p_caption: caption }, signal);
+  }
+  return { caption, route: 'realtime' };
 }
 
 export default function LiveKhutbah() {
@@ -96,6 +138,7 @@ export default function LiveKhutbah() {
   const [processing, setProcessing] = useState(false);
   const [skipped, setSkipped] = useState(0);
   const [clipNotice, setClipNotice] = useState('');
+  const [connection, setConnection] = useState('');
 
   async function refreshDevices() {
     try {
@@ -116,6 +159,7 @@ export default function LiveKhutbah() {
     run.controller.abort();
     run.queue.length = 0;
     clearInterval(run.heartbeat);
+    clearTimeout(run.retryTimer);
     clearTimeout(run.uploadTimer);
     if (mounted.current) {
       setLevel(0);
@@ -160,12 +204,18 @@ export default function LiveKhutbah() {
 
   async function enqueue(run, clip) {
     if (!run.live) return;
+    const closedAt = performance.now();
+    // Commit at the audio boundary, including when a previous subtitle is still pending.
+    // A connection opened mid-phrase only heard its tail; recover the whole local WAV.
+    const realtime = run.clipConnection?.active ? run.clipConnection.commit() : null;
+    if (!realtime) run.realtime?.discard();
+    run.clipConnection = null;
     // Prioritise current speech when the provider falls behind.
     if (run.queue.length >= 2) {
       run.queue.shift();
       setSkipped(n => n + 1);
     }
-    run.queue.push({ clip, closedAt: performance.now() });
+    run.queue.push({ clip, realtime, closedAt, startedAt: closedAt - khutbahWavDurationMs(clip) });
     if (run.uploading) return;
     run.uploading = true;
     setProcessing(true);
@@ -174,13 +224,17 @@ export default function LiveKhutbah() {
         run.uploadTimer = setTimeout(() => {
           void stop(run, 'De vertaling duurde te lang. Controleer de verbinding en start de sessie opnieuw.');
         }, 55000);
-        const { clip: audio, closedAt } = takePendingAudio(run.queue);
-        const result = await translate(run, audio);
+        const entry = takePendingAudio(run.queue);
+        const result = await processClip(run, entry);
         clearTimeout(run.uploadTimer);
         if (!run.live) break;
-        if (result.route === 'transcript') run.route = 'transcript';
         setClipNotice(skippedClipMessage(result));
-        if (result.caption) setPublished({ text: result.caption, delayMs: performance.now() - closedAt });
+        if (result.caption) {
+          run.publishedAt = performance.now();
+          const realtime = result.route === 'realtime';
+          if (realtime) run.retryDelay = 10_000;
+          setPublished({ text: result.caption, delayMs: run.publishedAt - entry.startedAt, realtime });
+        }
       }
     } catch (err) {
       if (run.live) void stop(run, describeError(err));
@@ -191,11 +245,39 @@ export default function LiveKhutbah() {
     }
   }
 
+  async function connectRealtime(run) {
+    if (typeof RTCPeerConnection === 'undefined') {
+      setConnection('Fragmentverwerking · Deze browser ondersteunt geen WebRTC.');
+      return;
+    }
+    const fallback = message => {
+      if (!run.live) return;
+      setConnection(message ? 'Fragmentverwerking · ' + message : 'Fragmentverwerking');
+      // Keep recording locally while re-establishing an interrupted or expired session.
+      if (!message) {
+        clearTimeout(run.retryTimer);
+        run.retryTimer = setTimeout(() => { if (run.live) void connectRealtime(run); }, run.retryDelay);
+        run.retryDelay = Math.min(run.retryDelay * 2, 120_000);
+      }
+    };
+    try {
+      run.realtime = await openKhutbahRealtime({
+        stream: run.stream,
+        signal: run.controller.signal,
+        exchangeSdp: (offer, signal) => exchangeSdp(run, offer, signal),
+        onDisconnect: () => fallback(),
+      });
+      if (run.live) setConnection(run.realtime.active ? 'Rechtstreekse audioverbinding' : 'Fragmentverwerking');
+    } catch (err) {
+      fallback([401, 403, 409, 429, 503].includes(err.status) ? err.message : '');
+    }
+  }
+
   async function start(broadcast) {
     // A successful microphone test can become the live input without reopening it.
     const existing = active.current;
     if (existing && (existing.controller.signal.aborted || !existing.testing || !broadcast)) return;
-    const run = existing || { controller: new AbortController(), queue: [], sequence: 0 };
+    const run = existing || { controller: new AbortController(), queue: [], sequence: 0, preferTranscriptUntil: 0, publishedAt: -Infinity, retryDelay: 10_000 };
     active.current = run;
     run.testing = false;
     setPhase(broadcast ? 'starting' : 'opening');
@@ -205,11 +287,14 @@ export default function LiveKhutbah() {
     setPublished(null);
     try {
       if (!existing) {
-        await openKhutbahMicrophone({
+        run.stream = await openKhutbahMicrophone({
           deviceId: input,
           signal: run.controller.signal,
           onLevel: setLevel,
           live: () => run.live,
+          onStart: () => { run.clipConnection = run.realtime?.active ? run.realtime : null; },
+          isRealtime: () => run.clipConnection?.active,
+          onDiscard: () => { run.realtime?.discard(); },
           onClip: clip => { void enqueue(run, clip); },
           onFailure: message => { void stop(run, message); },
         });
@@ -227,6 +312,8 @@ export default function LiveKhutbah() {
       if (run.controller.signal.aborted) return;
       run.live = true;
       setPhase('live');
+      setConnection('Audioverbinding openen…');
+      void connectRealtime(run);
       run.heartbeat = setInterval(async () => {
         try {
           await control(run.id, 'heartbeat');
@@ -251,7 +338,7 @@ export default function LiveKhutbah() {
         <section className="space-y-5 rounded-xl border border-zinc-700 bg-zinc-900/70 p-5 sm:p-7" aria-labelledby="mic-heading">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 id="mic-heading" className="text-xl font-semibold">Microfoon</h3>
-            <span role="status" className={phase === 'live' ? 'text-emerald-300' : 'text-zinc-300'}>{phaseLabels[phase]}</span>
+            <span role="status" className={phase === 'live' ? 'text-emerald-300' : 'text-zinc-300'}>{phaseLabels[phase]}{phase === 'live' && ' · ' + connection}</span>
           </div>
           <div>
             <label htmlFor="khutbah-input" className="mb-2 block font-medium">Geluidsingang</label>
@@ -298,7 +385,7 @@ export default function LiveKhutbah() {
             <p aria-live="polite" className="text-lg">{published?.text || (phase === 'live' ? (processing ? 'Aan het vertalen…' : 'Wachten op spraak…') : 'Nog geen ondertiteling.')}</p>
             {published && (
               <p className="mt-2 text-sm text-zinc-400">
-                Tijd van einde fragment tot bevestigde publicatie · {seconds.format(published.delayMs / 1000)} s
+                Begin fragment tot publicatie · {seconds.format(published.delayMs / 1000)} s · {published.realtime ? 'Rechtstreeks' : 'Via audiofragment'}
               </p>
             )}
           </div>

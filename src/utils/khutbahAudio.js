@@ -62,22 +62,30 @@ export function khutbahWavDurationMs(clip) {
 }
 
 // Keep a short lead-in for soft consonants. Prefer pauses and cap continuous speech.
-export function speechSegments(rate, onClip) {
+export function speechSegments(rate, onClip, { onStart, onDiscard, isRealtime } = {}) {
   let lead = [];
   let frames = [];
   let voicedMs = 0;
   let quietMs = 0;
   let softMs = 0;
   let voiceLevel = 0;
+  let idleMs = 0;
 
   return (frame, rms) => {
     const speech = rms >= SPEECH_FLOOR;
     if (!frames.length && !speech) {
       lead.push(frame);
       if (lead.length > 4) lead.shift();
+      idleMs += FRAME_MS;
+      if (idleMs >= 1200) {
+        onDiscard?.();
+        idleMs = 0;
+      }
       return;
     }
     if (!frames.length) {
+      idleMs = 0;
+      onStart?.();
       frames = lead;
       lead = [];
     }
@@ -91,9 +99,11 @@ export function speechSegments(rate, onClip) {
     quietMs = speech ? 0 : quietMs + FRAME_MS;
     const duration = frames.length * FRAME_MS;
     const phraseEnded = quietMs >= (duration >= 1800 ? 280 : 520);
-    const softBreak = duration >= 3000 && softMs >= 120;
-    if (phraseEnded || softBreak || duration >= MAX_CLIP_MS) {
+    const streaming = isRealtime?.();
+    const softBreak = duration >= (streaming ? 2000 : 3000) && softMs >= 120;
+    if (phraseEnded || softBreak || duration >= (streaming ? 2800 : MAX_CLIP_MS)) {
       if (voicedMs >= 160) onClip(encodeWav(frames, rate));
+      else onDiscard?.();
       frames = [];
       quietMs = 0;
       voicedMs = 0;
@@ -103,7 +113,7 @@ export function speechSegments(rate, onClip) {
   };
 }
 
-export async function openKhutbahMicrophone({ deviceId, signal, onLevel, live, onClip, onFailure }) {
+export async function openKhutbahMicrophone({ deviceId, signal, onLevel, live, onClip, onFailure, onStart, onDiscard, isRealtime }) {
   if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
     throw new Error('Open de adminpagina via HTTPS of localhost in een recente browser met microfoontoegang.');
   }
@@ -142,7 +152,7 @@ export async function openKhutbahMicrophone({ deviceId, signal, onLevel, live, o
     const source = context.createMediaStreamSource(stream);
     source.connect(node);
     node.connect(context.destination);
-    const collect = speechSegments(context.sampleRate, onClip);
+    const collect = speechSegments(context.sampleRate, onClip, { onStart, onDiscard, isRealtime });
     let nextLevel = 0;
     node.port.onmessage = ({ data }) => {
       let energy = 0;
@@ -166,6 +176,7 @@ export async function openKhutbahMicrophone({ deviceId, signal, onLevel, live, o
     context.addEventListener('statechange', () => {
       if (context.state !== 'running') disconnected();
     }, { signal });
+    return stream;
   } catch (error) {
     // getUserMedia can resolve after a cancelled permission dialog.
     signal.removeEventListener('abort', release);
